@@ -1,0 +1,409 @@
+{
+    # TransformerConfig
+    # Base config class providing general settings for non-mutability and json serialization options
+
+    #
+    "runner":     {
+        # RunnerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # Type of the runner to be invoked.
+        "runner_type": "pdsh",
+
+        # Hostsfile path (in MPI style) that defines the resource pool available to the job (e.g., worker-0 slots=4)
+        "hostsfile":  null,
+
+        # List of hosts alternative to hostsfile (e.g., worker-0 slots=4)
+        "hosts": null,
+
+        # (optional) Port used by PyTorch distributed for communication during training.
+        "master_port": 29500,
+
+        # (optional) IP address of node 0, will be inferred via 'hostname -I' if not specified.
+        "master_addr": null,
+
+        # User script to launch
+        "script": "src/scaling/transformer/train.py",
+
+        # Number of GPUs per node, is used if not defined in hosts' slots
+        "default_gpu_count": 8,
+
+        # docker configuration in case using a docker runner type
+        "docker_config":         {
+            # RunnerDockerConfig
+            # Base config class providing general settings for non-mutability and json serialization options
+
+            # Name of the docker container to be started
+            "docker_container": null,
+
+            # Run docker command with sudo
+            "docker_sudo": false,
+
+            # List of directories to be mounted in the docker under the same path
+            "docker_mounts": [["/mnt/", "/mnt/"]]
+        },
+
+        "use_determined": False
+    },
+
+    #
+    "logger":     {
+        # LoggerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        "metrics_ranks": [0],
+
+        #
+        "log_level": "info",
+
+        #
+        "log_dir": null,
+
+        #
+        "use_wandb": false,
+
+        #
+        "use_tensorboard": true,
+
+        # define the global ranks of process to write to tensorboard. If the list is omitted or None only rank 0 will write to tensorboard.
+        "tensorboard_ranks": null
+    },
+
+    #
+    "topology":     {
+        # TopologyConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        "model_parallel_size": 1,
+
+        "pipe_parallel_size": 1,
+
+        "data_parallel_size": 1,
+
+
+        # global train batch size including all gradient accumulation steps
+        "global_batch_size": null,
+
+        # Batch size for one training micro step. This is used when the global_batch_size cannot fit in GPU memory to determine the number of gradient accumulation steps.
+        "micro_batch_size": 2,
+
+        # Number of gradient accumulation. This is used when the global_batch_size cannot fit in GPU memory to determine the number of gradient accumulation steps.
+        "gradient_accumulation_steps": 1,
+
+        # Method to assign layers to pipeline stages
+        "pipe_partition_method": "balanced",
+
+        #
+        "activation_checkpointing_type": "disabled"
+    }
+,
+
+    #
+    "optimizer":     {
+        # AdamWOptimizerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # First coefficient used for computing running averages of gradient and its square
+        "beta1": 0.9,
+
+        # Second coefficient used for computing running averages of gradient and its square
+        "beta2": 0.95,
+
+        # term added to the denominator to improve numerical stability (default: 1e-8)
+        "eps": 1.0e-15,
+
+        # clip global l2 grads to this value, deactivate if 0.0
+        "gradient_clipping": 0.0,
+
+        # number of floating points to allreduce in one go
+        "allreduce_bucket_size": 500000000,
+
+        # Configuration of the loss scaler
+        "loss_scaler":         {
+            # LossScalerConfig
+            # Loss scaling is designed to combat the problem of underflowing gradients encountered at long
+            # times when training fp16 networks.  Dynamic loss scaling begins by attempting a very high loss
+            # scale. Ironically, this may result in overflowing gradients.
+
+            # The optimizer then skips the update step for this particular iteration/minibatch,
+            # and the loss scaler adjusts the loss scale to a lower value.
+            # If a certain number of iterations occur without overflowing gradients detected,
+            # the loss scaler increases the loss scale once more.
+            # In this way the  loss scaler attempts to "ride the edge" of
+            # always using the highest loss scale possible without incurring overflow.
+
+            #
+            "enable": false,
+
+            # Initial loss scale
+            "initial_scale": 4294967296.0,
+
+            #
+            "window": 1000,
+
+            #
+            "hysteresis": 2,
+
+            #
+            "consecutive_hysteresis": false,
+
+            #
+            "min_scale": 1.0,
+
+            #
+            "factor": 2.0
+        }
+,
+
+        # enable zero stage 1 optimizer
+        "zero": true
+    }
+,
+
+    #
+    "learning_rate_scheduler":     {
+        # LearningRateSchedulerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # Base learning rate; this is also the maximum learning rate.
+        "learning_rate": 0.00025,
+
+        # Minimum learning rate below which a step's learning rate will never drop. This is the final learning rate after the schedule has been applied.
+        "learning_rate_minimum": 0.0,
+
+        # Shape of the learning rate decay after warm up
+        "learning_rate_decay_style": "cosine",
+
+        # Number of iterations within which the learning rate follows the schedule. Warmup iterations are included.
+        "learning_rate_decay_iters": 400,
+
+        # Number of warmup steps during which the learning rate is linearly increased to the maximum learning rate. The actual schedule starts after the warmup steps.
+        "learning_rate_warmup_steps": 200
+    }
+,
+
+    #
+    "training":     {
+        # TrainingConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        #
+        "weight_decay": 0.01,
+    }
+,
+
+    #
+    "trainer":     {
+        # TrainerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # directory for saving checkpoints
+        "save_dir": "checkpoints",
+
+        # save a checkpoint every 'save_interval' steps to save_dir, iff save_dir is defined
+        "save_interval": 25,
+
+        # directory for loading checkpoints
+        "load_dir": null,
+
+        #
+        "train_iterations": 50,
+
+        #
+        "seed": 42,
+
+        # error out if a checkpoint could not be loaded
+        "assert_checkpoint_loaded": False
+    }
+,
+
+    #
+    "profiler":     {
+        # ProfilerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # number of to be timed steps, will not run profiling if set to 0
+        "profile_steps": 0,
+
+        # start of profiler after this many steps of the current process. Not starting at step 0 give the GPUs time to (physically) warm up and only starts timing after initial metadata has been synced
+        "profile_start_at_step": 10,
+
+        # start of profiler after this many steps of the current process. Not starting at step 0 give the GPUs time to (physically) warm up and only starts timing after initial metadata has been synced
+        "profiler_output": null
+    }
+,
+
+    #
+    "transformer_architecture":     {
+        # TransformerArchitectureConfig
+        # Transformer architecture config object containing non-mutable (constant) architecture specific configurations
+
+        "weight_tying": false,  # turn off weight tying
+
+        # Size of the vocabulary before padding; this matches the vocab size of the tokenizer
+        "vocab_size": 128000,
+
+        # Hidden size.
+        "hidden_size": 256,
+
+        # Number of transformer layers
+        "num_layers": 4,
+
+        # Number of attention heads
+        "num_attention_heads": 2,
+
+        #
+        "rotary_embedding_base": 10000,
+
+        # Sequence length in number of tokens in one sample on which a train job is run; at inference time the sequence length of a sample should (usually) not be exceeded.
+        "sequence_length": 64,
+
+        "norm_type": "rms",
+        "relative_position_embedding_type": "rotary_complex",
+        "attention_bias": False,
+        "mlp_type": "swiglu",
+        "mlp_factor": 2.5,
+        "mlp_bias": False,
+
+        #
+        "masked_softmax": {
+            # MaskedSoftmaxConfig
+            # Base config class providing general settings for non-mutability and json serialization options
+
+            # select an optimization kernel, if anything other than torch is selected the optional gpu_optimization dependencies need to be installed
+            "kernel": "torch",
+
+            # Cast tensor to fp32 before softmax for higher precision; this cannot be applied for fused kernels
+            "softmax_in_fp32": false,
+
+            # Scale with which scores are multiplied (not divided!) before softmax is applied. If scale is applied setting also softmax_in_fp32 is likely helpful.
+            "scale": 1.0
+        },
+
+        #
+        "layernorm":         {
+            # LayerNormConfig
+            # Base config class providing general settings for non-mutability and json serialization options
+
+            # select an optimization type for the layer norm call, if anything other than torch is selected the optional gpu_optimization dependencies need to be installed
+            "optimization_type": "torch",
+
+            # A value added to the denominator for numerical stability
+            "layernorm_epsilon": 1e-05
+        },
+
+        #
+        "precision": "bfloat16",
+
+        # dropout applied after the embedding layer
+        "dropout_embedding": 0.1,
+
+        # dropout applied to the attention probabilities
+        "dropout_attention_probs": 0.1,
+
+        # dropout applied after the embedding layer
+        "dropout_after_attention": 0.1,
+
+        # dropout applied after the embedding layer
+        "dropout_after_mlp": 0.1,
+
+        # bitfit finetuning
+        "bitfit_bias_config": null,
+
+        # softprompt finetuning
+        "softprompt_config": null,
+
+        # adapter finetuning
+        "adapter_config": null,
+
+        # LoRA finetuning
+        "lora_config": null,
+
+        # add image encoder to input embedding
+        "image_encoder": false,
+
+        # dropout applied after the image encoder projection
+        "dropout_image_encoder": 0.0,
+
+    }
+,
+
+    #
+    "data":     {
+        # DataConfig
+        # Data config object containing non-mutable (constant) dataset specific configurations
+
+        # Training data prefix pointing to tokenized memory map
+        "legacy_dataset": False,
+        "finetuning_dataset": False,
+        "data_prefixes": [
+            "tests/transformer/files/dataset/data"
+        ],
+
+        "use_mmap": True,
+
+        # Configuration for the blended dataset
+        "blended_dataset":         {
+            # BlendedDatasetConfig
+            # Base config class providing general settings for non-mutability and json serialization options
+
+            # If weight_by_num_documents is True, Builds dataset weights from a multinomial distribution over groups of data according to the number of documents in each group. WARNING: setting this to True will override any user provided weights
+            "weight_by_num_documents": true,
+
+            #
+            #   Alpha value for `weight_by_num_documents`. Only has an effect if `weight_by_num_documents` = True.
+
+            #   when alpha = 1, the probability of sampling from a given group = n_samples / total_samples
+            #   as alpha -> 0, the probability of sampling from all groups becomes equal, and number of documents has no effect
+            #   as alpha -> inf, the probability of sampling from the groups with *the most samples* -> 1
+
+            "weighted_sampler_alpha": 1.0,
+
+            #             # weights of singular datasets. The list needs to have the same length and order as the datasets provided
+            #             "weights": null,
+
+            #             # If True (with weight_by_num_documents set to True), this uses a modified method to build dataset weights
+
+            #     Work out the weighting of each dataset based on 'temperature' T and 'maximum' parameter K.
+
+            #     l is the list of dataset sizes.
+
+            #     Examples-proportional mixing sets a "limit" defined by max rate (in terms of samples).
+
+            #     The sampling rate of the m'th dataset r_m is:
+            #         r_m = min(e_m, K)/sum_n(min(e_n, K))
+            #     where:
+            #         limit: K,
+            #         number of examples in N datasets: e_n,
+            #         m'th dataset example: e_m,
+
+            #     This does two things:
+            #         - Limits all datasets larger than defined limit to a fixed equal sampling rate
+            #         - Upsamples datasets smaller than limit K to proportionally higher rate.
+
+            #     We add an option for temperature scaling (with T=1 equivalent to no scaling).
+            #     This raises r_m to the power of 1/T, and normalizes all the weights. As T increases,
+            #     the weights of proportionally smaller datasets increases (converges to equal sampling,
+            #     but this case should use alpha=0 sampling instead).
+
+            #     See https://arxiv.org/pdf/1910.10683.pdf (page 31) for more details.
+
+            #     src: https://github.com/huggingface/datasets/issues/217#issuecomment-648115586
+
+            "weight_examples_proportional": false,
+
+            # If set, rate limit K used in 'weight_examples_proportional'. Only has an effect if `weight_examples_proportional` = True.
+            "ep_maximum": null,
+
+            # Temperature value for `weight_examples_proportional`. Only has an effect if `weight_examples_proportional` = True. Temperature is inverse of alpha (as in weighted_sampler_alpha)
+            "ep_temperature": 1.0,
+
+            # Minimal size of the dataset.
+            "minimum_dataset_size": 0,
+
+            # directory to cache blended dataset index. this only needs to be set if more than one dataset is provided.
+            "cache_directory": null
+        }
+    },
+
+}

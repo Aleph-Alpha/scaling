@@ -1,0 +1,38 @@
+[
+  {
+    "completion": "wohoo",
+    "prompt": "Text: this is a test\nCompletion:"
+  },
+  {
+    "completion": "wohoo",
+    "prompt": "Text: this is a test\nCompletion:"
+  },
+  {
+    "completion": "wohoo",
+    "prompt": "Text: this is a test\nCompletion:"
+  },
+  {
+    "completion": "no",
+    "prompt": [
+      "Text: Is the person happy?\nImage:",
+      "images/sad.jpeg",
+      "\nCompletion:"
+    ]
+  },
+  {
+    "completion": "wohoo",
+    "prompt": "Text: this is a test\nCompletion:"
+  },
+  {
+    "completion": "yes",
+    "prompt": [
+      "Text: Is the person happy?\nImage:",
+      "images/happy.jpeg",
+      "\nCompletion:"
+    ]
+  },
+  {
+    "completion": "wohoo",
+    "prompt": "Text: this is a test\nCompletion:"
+  }
+]

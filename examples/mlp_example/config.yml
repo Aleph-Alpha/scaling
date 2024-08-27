@@ -1,0 +1,172 @@
+{
+    # MinimalConfig
+    # Base config class providing general settings for non-mutability and json serialization options
+
+    #
+    "runner":     {
+        # RunnerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # Type of the runner to be invoked.
+        "runner_type": "pdsh",
+
+        # Hostsfile path (in MPI style) that defines the resource pool available to the job (e.g., worker-0 slots=4)
+        "hostsfile": null,
+
+        # List of hosts alternative to hostsfile (e.g., worker-0 slots=4)
+        "hosts": null,
+
+        # (optional) Port used by PyTorch distributed for communication during training.
+        "master_port": 29501,
+
+        # (optional) IP address of node 0, will be inferred via 'hostname -I' if not specified.
+        "master_addr": null,
+
+        # User script to launch
+        "script": "examples/mlp_example/train.py",
+
+        # Number of GPUs per node, is used if not defined in hosts' slots
+        "default_gpu_count": 8,
+
+        # docker configuration in case using a docker runner type
+        "docker_config":         {
+            # RunnerDockerConfig
+            # Base config class providing general settings for non-mutability and json serialization options
+
+            # Name of the docker container to be started
+            "docker_container": null,
+
+            # Run docker command with sudo
+            "docker_sudo": false,
+
+            # List of directories to be mounted in the docker under the same path
+            "docker_mounts": null
+        }
+
+    }
+,
+
+    #
+    "topology":     {
+        # TopologyConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        #
+        "global_rank": null,
+
+        #
+
+        #
+        "local_slot": null,
+
+        #
+        "model_parallel_size": 1,
+
+        #
+        "pipe_parallel_size": 1,
+
+        #
+        "data_parallel_size": 1,
+
+        # global train batch size including all gradient accumulation steps
+        "global_batch_size": null,
+
+        # Batch size for one training micro step. This is used when the global_batch_size cannot fit in GPU memory to determine the number of gradient accumulation steps.
+        "micro_batch_size": 256,
+
+        # Number of gradient accumulation. This is used when the global_batch_size cannot fit in GPU memory to determine the number of gradient accumulation steps.
+        "gradient_accumulation_steps": 1
+    }
+,
+
+    #
+    "optimizer":     {
+        # AdamWOptimizerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # First coefficient used for computing running averages of gradient and its square
+        "beta1": 0.9,
+
+        # Second coefficient used for computing running averages of gradient and its square
+        "beta2": 0.95,
+
+        # term added to the denominator to improve numerical stability (default: 1e-8)
+        "eps": 1e-08,
+
+        # clip global l2 grads to this value, deactivate if 0.0
+        "gradient_clipping": 1.0,
+
+        # number of floating points to allreduce in one go
+        "allreduce_bucket_size": 500000000
+    }
+,
+
+    #
+    "learning_rate_scheduler":     {
+        # LearningRateSchedulerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # Base learning rate; this is also the maximum learning rate.
+        "learning_rate": 0.01,
+
+        # Minimum learning rate below which a step's learning rate will never drop. This is the final learning rate after the schedule has been applied.
+        "learning_rate_minimum": 0.0,
+
+        # Shape of the learning rate decay after warm up
+        "learning_rate_decay_style": "cosine",
+
+        # Number of iterations within which the learning rate follows the schedule. Warmup iterations are included.
+        "learning_rate_decay_iters": 1000,
+
+        # Number of warmup steps during which the learning rate is linearly increased to the maximum learning rate. The actual schedule starts after the warmup steps.
+        "learning_rate_warmup_steps": 0
+    }
+,
+
+    #
+    "training":     {
+        # TrainingConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        #
+        "weight_decay": 0.0001
+    },
+
+    #
+    "trainer": {
+        # directory for saving checkpoints
+        "save_dir": ".checkpoints",
+
+        # save a checkpoint every 'save_interval' steps to save_dir, iff save_dir is defined
+        "save_interval": 101,
+
+        # directory for loading checkpoints
+        "load_dir": null,
+
+        #
+        "train_iterations": 100,
+
+        #
+        "eval_interval": 10,
+
+        #
+        "eval_iterations": 1000,
+
+        #
+        "seed": 42,
+
+        # error out if a checkpoint could not be loaded
+        "assert_checkpoint_loaded": False,
+    },
+
+    "logger": {
+        "log_dir": "debug_logs",
+        "use_wandb": False,
+        "use_tensorboard": False,
+    },
+
+    "architecture": {
+        "n_hidden_layers": 3,
+        "hidden_dim": 128,
+    },
+}

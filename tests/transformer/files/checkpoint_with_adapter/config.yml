@@ -1,0 +1,40 @@
+{
+    "topology":
+        {
+            "global_rank": 0,
+            "world_size": 8,
+            "local_slot": 0,
+            "model_parallel_size": 2,
+            "pipe_parallel_size": 2,
+            "data_parallel_size": 2,
+            "global_batch_size": 16,
+            "micro_batch_size": 2,
+            "gradient_accumulation_steps": 4,
+            "pipe_partition_method": "uniform",
+            "activation_checkpointing_type": "disabled",
+        },
+    "transformer_architecture":
+        {
+            "vocab_size": 128000,
+            "hidden_size": 16,
+            "num_layers": 8,
+            "num_attention_heads": 4,
+            "rotary_embedding_base": 10000,
+            "sequence_length": 2048,
+            "masked_softmax":
+                { "kernel": "torch", "softmax_in_fp32": false, "scale": 1.0 },
+            "layernorm":
+                { "optimization_type": "torch", "layernorm_epsilon": 1e-05 },
+            "precision": "bfloat16",
+            "dropout_embedding": 0.1,
+            "dropout_attention_probs": 0.1,
+            "dropout_after_attention": 0.1,
+            "dropout_after_mlp": 0.1,
+
+            "image_encoder": False,
+            "biases": [],
+            "softprompts": [],
+            "adapters": [],
+            "embedding_heads": [],
+        },
+}

@@ -1,0 +1,13 @@
+torch==2.1.1
+torchvision==0.16.1
+blended-dataset-loop==0.1
+pydantic==2.8.2
+einops
+pyyaml
+numpy==1.26.4
+tensorboard
+tqdm
+python-dateutil
+tokenizers
+pillow
+wandb

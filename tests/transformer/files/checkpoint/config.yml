@@ -1,0 +1,124 @@
+{
+    "runner": {
+        "runner_type": "pdsh",
+        "hostsfile": null,
+        "hosts": null,
+        "master_port": 29500,
+        "master_addr": null,
+        "script": null,
+        "default_gpu_count": 8,
+        "docker_config": {
+            "docker_container": null,
+            "docker_sudo": false,
+            "docker_mounts": null
+        }
+    },
+    "logger": {
+        "log_level": "info",
+        "log_dir": null,
+        "use_wandb": true,
+        "wandb_ranks": null,
+        "wandb_host": "https://api.wandb.ai",
+        "wandb_team": "aleph-alpha",
+        "wandb_project": "aleph-alpha-scaling",
+        "wandb_group": "debug-2022-12-31-12-02-03",
+        "wandb_api_key": null,
+        "use_tensorboard": false,
+        "tensorboard_ranks": null
+    },
+    "topology": {
+        "global_rank": 0,
+        "world_size": 8,
+        "local_slot": 0,
+        "model_parallel_size": 2,
+        "pipe_parallel_size": 2,
+        "data_parallel_size": 2,
+        "global_batch_size": 16,
+        "micro_batch_size": 2,
+        "gradient_accumulation_steps": 4,
+        "pipe_partition_method": "uniform",
+        "activation_checkpointing_type": "disabled"
+    },
+    "optimizer": {
+        "beta1": 0.9,
+        "beta2": 0.95,
+        "eps": 1e-08,
+        "gradient_clipping": 1.0,
+        "allreduce_bucket_size": 500000000,
+        "loss_scaler": {
+            "enable": false,
+            "initial_scale": 4294967296.0,
+            "window": 1000,
+            "hysteresis": 2.0,
+            "consecutive_hysteresis": false,
+            "min_scale": 1.0,
+            "factor": 2.0
+        },
+        "zero": false
+    },
+    "learning_rate_scheduler": {
+        "learning_rate": 0.0001,
+        "learning_rate_minimum": 0.0,
+        "learning_rate_decay_style": "cosine",
+        "learning_rate_decay_iters": 1000,
+        "learning_rate_warmup_steps": 100
+    },
+    "training": {
+        "weight_decay": 0.0001
+    },
+    "trainer": {
+        "save_dir": "checkpoints",
+        "save_interval": 100,
+        "load_dir": null,
+        "train_iterations": 1000,
+        "seed": 42
+    },
+    "profiler": {
+        "profile_steps": 0,
+        "profile_start_at_step": 10,
+        "profiler_output": null
+    },
+    "transformer_architecture": {
+        "vocab_size": 128000,
+        "hidden_size": 16,
+        "num_layers": 8,
+        "num_attention_heads": 4,
+        "rotary_embedding_base": 10000,
+        "sequence_length": 2048,
+        "masked_softmax": {
+            "kernel": "torch",
+            "softmax_in_fp32": false,
+            "scale": 1.0
+        },
+        "layernorm": {
+            "optimization_type": "torch",
+            "layernorm_epsilon": 1e-05
+        },
+        "precision": "bfloat16",
+        "dropout_embedding": 0.1,
+        "dropout_attention_probs": 0.1,
+        "dropout_after_attention": 0.1,
+        "dropout_after_mlp": 0.1,
+
+        "image_encoder": True,
+        "biases": [{"name": "image_encoder"}, {"name": "symmetric"}, {"name": "asymmetric"}, {"name": "symmetric_128"}, {"name": "asymmetric_128"}],
+        "softprompts": [
+            {"name": "simplification", "n_tokens": 26},
+            {"name": "image_encoder", "n_tokens": 26},
+        ],
+        "adapters": [
+            {"name": "image_encoder", "attention_downsampling_factor": 0.25, "mlp_downsampling_factor": 0.25, "init_std": 0.4}
+        ],
+        "embedding_heads": [
+            {"name": "symmetric_128", "proj_layers": [128]},
+            {"name": "asymmetric_128", "proj_layers": [128]},
+            {"name": "symmetric", "proj_layers": []},
+            {"name": "asymmetric", "proj_layers": []}
+        ]
+    },
+    "data": {
+
+        "legacy_dataset": True,
+        "data_prefixes": null
+    }
+}

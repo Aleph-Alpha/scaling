@@ -1,0 +1,12 @@
+{
+    "architecture": {
+        "num_layers": 1,
+        "hidden_size": 16,
+        "num_attention_heads": 2,
+        "seq_length": 4,
+        "max_position_embeddings": 4,
+        "vocab_size": 512,
+        "pos_emb": "rotary",
+    },
+    "device": "cpu",
+}

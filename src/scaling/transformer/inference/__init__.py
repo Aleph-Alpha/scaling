@@ -1,0 +1,1 @@
+from .inference_model import TransformerInferenceModule
