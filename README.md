@@ -34,7 +34,7 @@ Among the featured architecture options we support:
 
 ## Installation
 
-The codebase is tested and compatible with Python 3.10 and PyTorch 2.1.1.
+The installation requires Linux with Python 3.10 and PyTorch 2.1.1.
 You will also need the appropriate CUDA dependencies and version installed on your system for GPU support.
 Clone this repository and install:
 
@@ -44,15 +44,17 @@ pip install .
 
 ### Flash Attention
 
-To install Flash Attention, ensure that your environment variables are set correctly.
-The `CUDA_HOME` variable should point to the location of your CUDA installation.
-For additional information or troubleshooting, please refer to [the official documentation](https://github.com/Dao-AILab/flash-attention).
-You can install Flash Attention as additional dependency:
+To install Flash Attention, you need to make sure you have PyTorch installed already. 
+Simply install the base depenendencies with `pip install .` before installing Flash Attention.
+Then install Flash Attention with:
 
 ```bash
 pip install .[gpu_optimization]
 ```
 
+Ensure that your environment variables are set correctly.
+The `CUDA_HOME` variable should point to the location of your CUDA installation.
+For additional information or troubleshooting, please refer to [the official documentation](https://github.com/Dao-AILab/flash-attention).
 You can then use Flash Attention in your Transformer architecture configuration:
 
 ```json
@@ -100,6 +102,7 @@ For instance, if you have a single GPU device available, set the topology parame
 Note: The number of available GPU devices needs to be equal to ```model_parallel_size * pipe_parallel_size * data_parallel_size```. To control this, you can simply set the ```CUDA_VISIBLE_DEVICES``` environment variable to the desired GPU indices.
 
 If you want to run a large-scale job on a cluster, you can in principle use the same code, but make sure the training script gets executed in parallel. We also provide the tooling to do this. For an in-depth look, check out our more detailed guide on [how to train a model on multiple nodes](/examples/tutorials/multi_node_training.md).
+Scaling also features [a basic inference module](/examples/tutorials/inference.md) to generate outputs from model checkpoints.
 
 ### A 3D Parallel MNIST MLP Training
 
