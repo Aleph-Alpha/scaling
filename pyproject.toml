@@ -1,0 +1,102 @@
+[tool.poetry]
+name = "scaling"
+version = "0.2.0"
+description = ""
+authors = ["Aleph Alpha <requests@aleph-alpha-ip.ai>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "~3.10"
+pydantic = "^2.7.1"
+einops = "^0.8.0"
+pyyaml = "^6.0.1"
+numpy = "^1.26.4"
+tensorboard = "^2.16.2"
+tqdm = "^4.66.4"
+python-dateutil = "^2.9.0.post0"
+tokenizers = "^0.19.1"
+pillow = "^10.3.0"
+wheel = "^0.43.0"
+protobuf = "3.20.3"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.0"
+pre-commit = "^3.7.1"
+ruff = "^0.4.4"
+mypy = "^1.10.0"
+types-requests = "^2.31.0.20240406"
+pydantic = "^2.7.1"
+types-pyyaml = "^6.0.12.20240808"
+types-protobuf = "^5.27.0.20240626"
+
+[tool.poetry.group.determined.dependencies]
+determined = "0.26.4"
+msrest = "0.6.21"
+google-api-core = "2.8.2"
+google-api-python-client = "2.61.0"
+
+[tool.poetry.group.training.dependencies]
+blended-dataset-loop = "0.1.0"
+wandb = "^0.17.0"
+
+[tool.poetry.group.optimization.dependencies]
+torchvision = "0.19.0"
+torch = "2.4.0"
+
+[tool.poetry.group.docs.dependencies]
+furo = "2024.5.6"
+sphinx = "7.3.7"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint.extend-per-file-ignores]
+# This linting error is just ignored until they are added to __all__ in OS-53
+# F041 should not be ignored afterward
+"__init__.py" = ["F401"] #Todo: Remove at OS-53
+
+[tool.mypy]
+plugins = "pydantic.mypy"
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "scaling.*"
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "examples.*"
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["./tests"]
+pythonpath = ["."]
+markers = [
+    "short: Short running tests",
+    "unit: Unit tests",
+    "parallel_linear: Parallel linear tests",
+    "masked_softmax: Maskes softmax tests",
+    "nn_rest: Remaining nn tests",
+    "transformer_module: Transformer module tests",
+    "parallel_module: Parallel module tests",
+    "scaling_training: Scaling training tests",
+    "training_extension: Training extension tests",
+    "training_save_checkpoints: Training save different checkpoints tests",
+    "resume_layout: Resume different layout tests",
+    "transformer_flash_attn: Transformer flash attention tests",
+    "lora: LoRA tests",
+    "transformer: Transformer tests",
+    "embedding: Embedding tests",
+    "transformer_training: Transformer training tests",
+    "training_legacy: Training legacy tests",
+    "frozen_image_encoder: Frozen image encoder tests",
+    "training_variants: Training variants tests",
+    "finetuning: Finetuning tests",
+    "training: Training tests",
+    "inference: Inference tests",
+    "cpu: CPU tests",
+]

@@ -1,23 +1,22 @@
-from scaling.core.logging import logger
-from scaling.core.runner import LaunchConfig
-from scaling.core.topology import Topology
-from scaling.core import BaseTrainer
-
 from examples.mlp_example.config import MLPConfig
 from examples.mlp_example.context import MLPContext
 from examples.mlp_example.data import MNISTDataset
-from examples.mlp_example.model import init_model
-from examples.mlp_example.model import init_optimizer
-from examples.mlp_example.model import loss_function
-from examples.mlp_example.model import metrics_aggregation_fn
+from examples.mlp_example.model import init_model, init_optimizer, loss_function, metrics_aggregation_fn
+from scaling.core import BaseTrainer
+from scaling.core.logging import logger
+from scaling.core.runner import LaunchConfig
+from scaling.core.topology import Topology
 
 
-def main(launch_config: LaunchConfig):
-    config = launch_config.payload
-    config["topology"]["world_size"] = launch_config.world_size
-    config["topology"]["global_rank"] = launch_config.global_rank
-    config["topology"]["local_slot"] = launch_config.local_slot
-    config = MLPConfig.from_dict(launch_config.payload)
+def main(launch_config: LaunchConfig) -> None:
+    config_payload = launch_config.payload
+    assert config_payload is not None
+    topology_ = config_payload["topology"]
+    assert topology_ is not None
+    topology_["world_size"] = launch_config.world_size
+    topology_["global_rank"] = launch_config.global_rank
+    topology_["local_slot"] = launch_config.local_slot
+    config = MLPConfig.from_dict(config_payload)
 
     topology = Topology(config=config.topology)
     context = MLPContext(config=config, topology=topology)
@@ -52,7 +51,7 @@ def main(launch_config: LaunchConfig):
         dataset_evaluation=valid_data,
         sync_batch_to_model_parallel=MNISTDataset.sync_batch_to_model_parallel,
         metrics_aggregation_fn=metrics_aggregation_fn,
-        loss_function=loss_function,
+        loss_function=loss_function,  # type: ignore[arg-type]
     )
 
     trainer.run_training()

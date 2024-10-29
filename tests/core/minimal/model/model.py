@@ -20,9 +20,8 @@ from scaling.core import (
     VocabParallelEmbedding,
 )
 from scaling.core.nn.linear.utils import all_concat, copy_to_tensor_model_parallel_region
-
-from ..context import MinimalContext
-from ..data import MinimalBatch
+from tests.core.minimal.context import MinimalContext
+from tests.core.minimal.data import MinimalBatch
 
 
 class MinimalLinearIO(BaseLayerIO):

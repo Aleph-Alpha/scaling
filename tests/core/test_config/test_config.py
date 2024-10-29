@@ -10,6 +10,7 @@ from pydantic import Field, ValidationError
 from scaling.core import BaseConfig
 
 
+@pytest.mark.short
 def test_should_not_protect_model_namespace():
     warnings.filterwarnings("error")
 
@@ -22,6 +23,7 @@ def test_should_not_protect_model_namespace():
     _ = TestConfig()
 
 
+@pytest.mark.short
 def test_should_have_non_mutable_config():
     class TestConfig(BaseConfig):
         test_int: int = Field(
@@ -34,6 +36,7 @@ def test_should_have_non_mutable_config():
         config.test_int = 42
 
 
+@pytest.mark.short
 def test_should_error_with_unknown_field():
     class TestConfig(BaseConfig):
         test_int: int = Field(
@@ -45,6 +48,7 @@ def test_should_error_with_unknown_field():
         TestConfig(test_unknown=2)
 
 
+@pytest.mark.short
 def test_should_accept_optional_none_for_int():
     class TestConfig(BaseConfig):
         test_int: Optional[int] = Field(
@@ -55,6 +59,7 @@ def test_should_accept_optional_none_for_int():
     TestConfig(test_int=None)
 
 
+@pytest.mark.short
 def test_should_not_accept_none_for_int():
     class TestConfig(BaseConfig):
         test_int: int = Field(
@@ -66,6 +71,7 @@ def test_should_not_accept_none_for_int():
         TestConfig(test_int=None)
 
 
+@pytest.mark.short
 def test_should_not_accept_str_for_int():
     class TestConfig(BaseConfig):
         test_int: int = Field(
@@ -77,6 +83,7 @@ def test_should_not_accept_str_for_int():
         TestConfig(test_int="abc")
 
 
+@pytest.mark.short
 def test_should_json_serialize():
     class Color(Enum):
         RED = 1
@@ -124,6 +131,7 @@ def test_should_json_serialize():
     assert config_deserialized == config
 
 
+@pytest.mark.short
 def test_save_config_template(tmp_path: Path):
     class Color(Enum):
         RED = 1
@@ -178,8 +186,9 @@ def test_save_config_template(tmp_path: Path):
     TestConfig.save_template(out_file)
 
 
+@pytest.mark.short
 def test_save_example_config_template(tmp_path: Path):
-    from ..minimal import MinimalConfig
+    from tests.core.minimal import MinimalConfig
 
     out_file = tmp_path / "test_config.yaml"
     MinimalConfig.save_template(out_file)

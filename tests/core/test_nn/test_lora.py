@@ -256,6 +256,7 @@ def run_test_lora_output_equal_after_merge(
     ), "Output of merged and unmerged of LoRA-SelfAttention module does not match."
 
 
+@pytest.mark.lora
 @pytest.mark.parametrize("rank", [4, 16])
 @pytest.mark.parametrize("lora_modules", [["query"], ["value", "dense"], ["query", "key"]])
 @pytest.mark.parametrize("model_parallelism", [1, 2])
@@ -285,6 +286,7 @@ def test_lora_forward_pass(
     pass
 
 
+@pytest.mark.lora
 @pytest.mark.parametrize("rank", [2, 4])
 @pytest.mark.parametrize("lora_modules", [["query"], ["value", "dense"], ["value", "key"]])
 @pytest.mark.parametrize("model_parallelism", [1, 2])

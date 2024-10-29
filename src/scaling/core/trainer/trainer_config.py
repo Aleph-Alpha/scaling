@@ -3,7 +3,8 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from ..config import BaseConfig
+from scaling.core.config import BaseConfig
+from scaling.core.logging.tensor_statistics_recorder import TensorStatisticsRecorderConfig
 
 
 class TrainerConfig(BaseConfig):
@@ -79,4 +80,9 @@ class TrainerConfig(BaseConfig):
     separate_file_for_parameters: Optional[List[str]] = Field(
         None,
         description="create a separate checkpoint file for parameters matching these names",
+    )
+
+    tensor_statistics_recorder_config: Optional[TensorStatisticsRecorderConfig] = Field(
+        None,
+        description="configuration for recording tensor statistics",
     )

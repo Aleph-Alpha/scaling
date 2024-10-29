@@ -7,11 +7,10 @@ from scaling.core import (
     VocabParallelEmbedding,
 )
 from scaling.core.nn.linear.utils import all_concat, copy_to_tensor_model_parallel_region
-
-from ...context.config import (
+from scaling.transformer.context.config import (
     TransformerArchitectureConfig,
 )
-from .base import TransformerLayerBaseIO, TransformerLayerIO
+from scaling.transformer.model.layers.base import TransformerLayerBaseIO, TransformerLayerIO
 
 
 class TransformerLMHeadTied(TransformerLayerBaseIO):

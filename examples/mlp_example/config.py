@@ -9,24 +9,14 @@ from scaling.core import (
     TopologyConfig,
     TrainerConfig,
 )
-
 from scaling.core.logging import LoggerConfig
 
 
 class MLPArchitectureConfig(BaseConfig):
     n_hidden_layers: int = Field(
-        default=0,
-        ge=0, description=(
-            "The number of layers in the network, excluding input and "
-            "output layers."
-        )
+        default=0, ge=0, description=("The number of layers in the network, excluding input and " "output layers.")
     )
-    hidden_dim: int = Field(
-        default=64,
-        gt=0, description=(
-            "The number of hidden units in each hidden layer."
-        )
-    )
+    hidden_dim: int = Field(default=64, gt=0, description=("The number of hidden units in each hidden layer."))
 
 
 class TrainingConfig(BaseConfig):

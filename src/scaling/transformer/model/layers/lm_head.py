@@ -6,11 +6,11 @@ from scaling.core import (
     ColumnParallelLinear,
     Topology,
 )
-
-from ...context.config import (
+from scaling.core.nn.parameter_meta import UMUP_WEIGHT_TYPE
+from scaling.transformer.context.config import (
     TransformerArchitectureConfig,
 )
-from .base import TransformerLayerBaseIO, TransformerLayerIO
+from scaling.transformer.model.layers.base import TransformerLayerBaseIO, TransformerLayerIO
 
 
 class TransformerLMHead(TransformerLayerBaseIO):
@@ -29,6 +29,9 @@ class TransformerLMHead(TransformerLayerBaseIO):
             topology=topology,
             dtype=architecture_config.precision.dtype,
             init_method=init_method,
+            umup_weight_type=UMUP_WEIGHT_TYPE.OUTPUT_WEIGHT,
+            umup_on_residual=False,
+            fp8_config=architecture_config.fp8_config_lm_head,
         )
 
         if len(architecture_config.finetunable_token_ids) > 0:

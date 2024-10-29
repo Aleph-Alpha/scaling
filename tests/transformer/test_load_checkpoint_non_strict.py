@@ -8,8 +8,7 @@ from scaling.core.runner.launch_config import LaunchConfig
 from scaling.core.utils.port import find_free_port
 from scaling.transformer import TransformerConfig
 from scaling.transformer.train import main
-
-from .utils import dist_launcher
+from tests.core.utils import dist_launcher
 
 EPS = 1e-5
 
@@ -23,6 +22,7 @@ def run_test_training(return_dict: dict, config_dict: dict):
     return_dict["losses"] = losses
 
 
+@pytest.mark.transformer
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -78,13 +78,18 @@ def test_load_checkpoint_non_strict(
                 "initial_scale": 16,  # set low initial loss scale to actually perform a train step in this short test
             },
         },
-        "learning_rate_scheduler": {
-            "learning_rate": 0.1,
-            "learning_rate_minimum": 0.0,
-            "learning_rate_decay_style": "cosine",
-            "learning_rate_warmup_steps": 2,
-            "learning_rate_decay_iters": 10,
-        },
+        "training_groups": [
+            {
+                "group_name": "optimizer_group",
+                "learning_rate_scheduler": {
+                    "learning_rate": 0.1,
+                    "learning_rate_minimum": 0.0,
+                    "learning_rate_decay_style": "cosine",
+                    "learning_rate_warmup_steps": 2,
+                    "learning_rate_decay_iters": 10,
+                },
+            }
+        ],
         "trainer": {
             "save_dir": str(tmp_path),
             "save_interval": 6,
@@ -152,10 +157,19 @@ def test_load_checkpoint_non_strict(
         "mlp_adapter_image_encoder.dense_out.weight",
     ]
     config_dict["trainer"]["allowed_missing_keys_in_checkpoint"] = added_params
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = [
-        "summarization",
-        "image_encoder",
+    config_dict["training"]["allow_missing_params_in_optimizer"] = True
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_exclude": ["summarization", "image_encoder"],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.1,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
     ]
 
     config_loaded = TransformerConfig.from_dict(config_dict)

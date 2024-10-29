@@ -4,6 +4,7 @@ import torch
 from scaling.core import MaskedSoftmaxConfig, MaskedSoftmaxKernel, ParallelSelfAttention, RelativePositionEmbeddingType
 
 
+@pytest.mark.transformer_flash_attn
 @pytest.mark.parametrize("causal", [True, False])
 def test_flash_attention_output(causal):
     """
@@ -60,6 +61,7 @@ def test_flash_attention_output(causal):
     ), "Outputs of Flash Attention and non Flash Attention is not equal"
 
 
+@pytest.mark.transformer_flash_attn
 @pytest.mark.parametrize("causal", [True, False])
 def test_flash_attention_with_group_query_attention_output(causal):
     """

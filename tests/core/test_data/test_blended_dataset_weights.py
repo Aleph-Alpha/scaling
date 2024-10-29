@@ -1,10 +1,10 @@
 import pytest
 
 from scaling.core.data.blended_dataset import weights_by_num_docs, weights_examples_proportional
+from tests.core.utils import rounded_equal
 
-from ..utils import rounded_equal
 
-
+@pytest.mark.short
 @pytest.mark.parametrize(
     "num_docs",
     [
@@ -25,6 +25,7 @@ def test_weight_by_num_docs_alpha_0_produces_equal_weights(num_docs):
         ), "alpha 0.0 does not produce equal weightings"
 
 
+@pytest.mark.short
 @pytest.mark.cpu
 @pytest.mark.parametrize(
     "num_docs",
@@ -48,6 +49,7 @@ def test_weight_by_num_docs_alpha_1_produces_identy_weights(num_docs):
         ), "alpha 1.0 does not produce identity weightings"
 
 
+@pytest.mark.short
 @pytest.mark.parametrize(
     "num_docs",
     [
@@ -71,6 +73,7 @@ def test_weight_by_num_docs_alpha_produces_something_between_alpha0_and_alpha1(n
         ), "weights to not move in direction of unbiased distribution when alpha increases"
 
 
+@pytest.mark.short
 @pytest.mark.parametrize(
     "num_docs",
     [
@@ -92,6 +95,7 @@ def test_examples_proportional_mixing_vs_alpha(num_docs, alpha_base):
         ), "two sampling functions in this setting do not produce matching weights"
 
 
+@pytest.mark.short
 @pytest.mark.parametrize(
     "num_docs",
     [
@@ -126,6 +130,7 @@ def test_examples_proportional_mixing_no_temperature_scaling(num_docs, maximum):
     print(weights)
 
 
+@pytest.mark.short
 @pytest.mark.parametrize(
     "num_docs",
     [

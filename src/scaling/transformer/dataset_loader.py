@@ -5,13 +5,14 @@ from scaling.core import (
     BaseDataset,
 )
 from scaling.transformer import (
+    EmbeddingDataset,
     FinetuningChatDataset,
     FinetuningTextDataset,
     TextDataset,
     TransformerConfig,
 )
 from scaling.transformer.context import TransformerArchitectureConfig
-from scaling.transformer.context.config import DataConfig
+from scaling.transformer.context.config import ContrastiveLossFunctionConfig, DataConfig
 from scaling.transformer.tokenizer import Tokenizer, load_tokenizers
 
 
@@ -23,6 +24,8 @@ def load_datasets(
         return _load_finetuning_datasets(data_config, architecture_config, config)
     if data_config.finetuning_chat_dataset:
         return _load_chat_finetuning_datasets(data_config, architecture_config, config)
+    if data_config.embedding_dataset:
+        return _load_embedding_datasets(data_config, architecture_config, config)
     return _load_text_datasets(data_config, architecture_config, config)
 
 
@@ -83,6 +86,37 @@ def _extract_chat_finetuning_dataset(
     ]
 
 
+def _load_embedding_datasets(
+    data_config: DataConfig, architecture_config: TransformerArchitectureConfig, config: TransformerConfig
+) -> tuple[list[EmbeddingDataset], list[EmbeddingDataset]]:
+    assert data_config.data_prefixes is not None, "path to data prefix not defined in Luminous context"
+    datasets = _extract_embedding_dataset(data_config.data_prefixes, architecture_config, config)
+    validation_datasets = []
+    if data_prefixes := data_config.validation_data_prefixes:
+        validation_datasets = _extract_embedding_dataset(data_prefixes, architecture_config, config)
+    return datasets, validation_datasets
+
+
+def _extract_embedding_dataset(
+    data_prefixes: list[Path], architecture_config: TransformerArchitectureConfig, config: TransformerConfig
+) -> list[EmbeddingDataset]:
+    tokenizer, _ = _load_tokenizer(architecture_config)
+    assert isinstance(config.training.loss_function_config, ContrastiveLossFunctionConfig)
+    return [
+        EmbeddingDataset(
+            data_path=data_prefix,
+            tokenizer=tokenizer,
+            memory_map_dataset=config.data.embedding_dataset_memory_map,
+            use_instruction=config.training.loss_function_config.use_instructions,
+            number_of_hard_negatives=config.training.loss_function_config.number_of_hard_negatives,
+            sequence_length=config.transformer_architecture.sequence_length,
+            seed=config.trainer.seed,
+            query_side_only=config.training.loss_function_config.query_side_only,
+        )
+        for data_prefix in data_prefixes
+    ]
+
+
 def _extract_text_datasets(
     data_prefixes: list[Path],
     data_config: DataConfig,
@@ -100,6 +134,8 @@ def _extract_text_datasets(
             only_full_sequences=data_config.only_full_sequences,
             allow_incomplete_sequences_every_n=data_config.allow_incomplete_sequences_every_n,
             use_mmap=data_config.use_mmap,
+            reset_attention_mask=architecture_config.reset_attention_mask,
+            reset_position_ids=architecture_config.reset_position_ids,
         )
         for data_prefix in data_prefixes
     ]

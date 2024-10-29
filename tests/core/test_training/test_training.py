@@ -5,9 +5,8 @@ import pytest
 import torch
 
 from scaling.core.utils.port import find_free_port
-
-from ..minimal import MinimalConfig, main
-from ..utils import dist_launcher
+from tests.core.minimal import MinimalConfig, main
+from tests.core.utils import dist_launcher
 
 
 def run_test_training(return_dict: dict, config_dict: dict):
@@ -146,6 +145,7 @@ def run_test_training_wrapper(
                     assert not (v == 0.0).all()
 
 
+@pytest.mark.scaling_training
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -189,6 +189,7 @@ def test_training_baseline(
     )
 
 
+@pytest.mark.training_extension
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -235,6 +236,7 @@ def test_training_extension(
     )
 
 
+@pytest.mark.resume_layout
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size,gradient_accumulation_steps,activation_checkpointing_type,zero,model_parallel_size_resume,pipe_parallel_size_resume,world_size_resume,gradient_accumulation_steps_resume,activation_checkpointing_type_resume,zero_resume,bitfit_bias_name,bitfit_bias_name_resume",
     [
@@ -569,6 +571,7 @@ def test_training_resume_with_different_layout(
         assert (date_log_dir / "profile.json").is_file(), "did not save profile information"
 
 
+@pytest.mark.training_save_checkpoints
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size,gradient_accumulation_steps,activation_checkpointing_type",
     [

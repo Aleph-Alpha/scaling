@@ -11,8 +11,7 @@ import torch
 
 from scaling.core.data import BaseDataset
 from scaling.core.logging import logger
-
-from ..topology import Topology
+from scaling.core.topology import Topology
 
 
 class RandomSampler:

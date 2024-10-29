@@ -63,7 +63,7 @@
         "use_wandb": false,
 
         #
-        "use_tensorboard": true,
+        "use_tensorboard": false,
 
         # define the global ranks of process to write to tensorboard. If the list is omitted or None only rank 0 will write to tensorboard.
         "tensorboard_ranks": null
@@ -160,36 +160,19 @@
     }
 ,
 
-    #
-    "learning_rate_scheduler":     {
-        # LearningRateSchedulerConfig
-        # Base config class providing general settings for non-mutability and json serialization options
-
-        # Base learning rate; this is also the maximum learning rate.
-        "learning_rate": 0.00025,
-
-        # Minimum learning rate below which a step's learning rate will never drop. This is the final learning rate after the schedule has been applied.
-        "learning_rate_minimum": 0.0,
-
-        # Shape of the learning rate decay after warm up
-        "learning_rate_decay_style": "cosine",
-
-        # Number of iterations within which the learning rate follows the schedule. Warmup iterations are included.
-        "learning_rate_decay_iters": 400,
-
-        # Number of warmup steps during which the learning rate is linearly increased to the maximum learning rate. The actual schedule starts after the warmup steps.
-        "learning_rate_warmup_steps": 200
-    }
-,
-
-    #
-    "training":     {
-        # TrainingConfig
-        # Base config class providing general settings for non-mutability and json serialization options
-
-        #
-        "weight_decay": 0.01,
-    }
+    "training_groups": [
+        {
+            "group_name": "param_group",
+            "weight_decay": 0.001,
+            "learning_rate_scheduler": {
+                "learning_rate": 0.0001,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        },
+    ]
 ,
 
     #

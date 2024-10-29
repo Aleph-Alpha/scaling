@@ -3,9 +3,9 @@ from typing import Optional, Sequence
 
 import torch
 
-from ...topology import Topology
-from .layer_spec import LayerSpec, TiedLayerSpec
-from .pipeline_partitioning import PipePartitionCoordinates
+from scaling.core.nn.parallel_module.layer_spec import LayerSpec, TiedLayerSpec
+from scaling.core.nn.parallel_module.pipeline_partitioning import PipePartitionCoordinates
+from scaling.core.topology import Topology
 
 
 class TiedLayerInformation:

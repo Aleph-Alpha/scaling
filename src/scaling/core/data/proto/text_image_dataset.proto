@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+message PromptImageLocation {
+  int32 start_index = 1;
+  int32 end_index = 2;
+}
+
+message TextImageExample {
+  repeated int32 input_token_list = 1;
+  repeated int32 target_token_list = 2;
+  repeated bool loss_mask_list = 3;
+  repeated bytes prompt_image_data = 4;
+  repeated PromptImageLocation prompt_image_locations = 5;
+}

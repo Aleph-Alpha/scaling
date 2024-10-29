@@ -8,15 +8,15 @@ import numpy as np
 import torch
 from numpy.typing import NDArray
 
-from ..logging import logger
-from ..topology import Topology
-from .base_dataset import (
+from scaling.core.data.base_dataset import (
     BaseDataset,
     BaseDatasetBatchBeforeSyncGeneric,
     BaseDatasetBatchGeneric,
     BaseDatasetItemGeneric,
 )
-from .blended_dataset_config import BlendedDatasetConfig
+from scaling.core.data.blended_dataset_config import BlendedDatasetConfig
+from scaling.core.logging import logger
+from scaling.core.topology import Topology
 
 BaseDatasetGeneric = TypeVar("BaseDatasetGeneric", bound=BaseDataset)
 

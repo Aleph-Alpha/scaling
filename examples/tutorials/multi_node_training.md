@@ -11,6 +11,8 @@ These include:
 
 This guide mostly aims at enabling large-scale training using our ```scaling.transformer``` codebase, but most of the content applies more generally to any training loop that is built on ```scaling.core```.
 
+Note that this guide assumes no explicit cluster management tool, such as Determined or Ray, is used.
+
 ## Configuring a Model Training
 
 Generally, Scaling provides a [Pydantic](https://docs.pydantic.dev/latest/)-based configuration system to configure a model for training.

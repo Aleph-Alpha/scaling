@@ -4,6 +4,7 @@ import torch
 from scaling.core import LayerNorm, LayerNormConfig, LayerNormOptimizationType
 
 
+@pytest.mark.nn_rest
 @pytest.mark.skipif((not torch.cuda.is_available()), reason="no cuda available")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 @pytest.mark.parametrize("batch_size", [2, 4, 8])

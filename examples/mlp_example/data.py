@@ -1,26 +1,21 @@
 from pathlib import Path
+from typing import Any
 
 import torch
 import torchvision
-
 from torchvision import transforms
 
-from scaling.core import broadcast_data
-from scaling.core import BaseDataset
-from scaling.core import BaseDatasetBatch
-from scaling.core import BaseDatasetItem
+from scaling.core import BaseDataset, BaseDatasetBatch, BaseDatasetItem, broadcast_data
 from scaling.core.topology import Topology
 
 
 class MNISTDatasetItem(BaseDatasetItem):
-
-    def __init__(self, input_, target):
+    def __init__(self, input_: Any, target: Any) -> None:
         self.input = torch.tensor(input_, dtype=torch.float16)
         self.target = torch.tensor(target, dtype=torch.float16)
 
 
 class MNISTDatasetBatch(BaseDatasetBatch):
-
     def __init__(
         self,
         inputs: torch.Tensor | None = None,
@@ -29,23 +24,21 @@ class MNISTDatasetBatch(BaseDatasetBatch):
         self.inputs = inputs
         self.targets = targets
 
-    def only_inputs(self):
+    def only_inputs(self) -> "MNISTDatasetBatch":
         return MNISTDatasetBatch(inputs=self.inputs)
 
-    def only_targets(self):
+    def only_targets(self) -> "MNISTDatasetBatch":
         return MNISTDatasetBatch(targets=self.targets)
 
 
-class MNISTDataset(BaseDataset[
-    MNISTDatasetItem,
-    MNISTDatasetBatch,
-    MNISTDatasetBatch
-]):
-
+class MNISTDataset(BaseDataset[MNISTDatasetItem, MNISTDatasetBatch, MNISTDatasetBatch]):
     def __init__(self, root: Path = Path("./.data"), train: bool = True):
-        transform = transforms.Compose([
-            transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,)),
-        ])
+        transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize((0.5,), (0.5,)),
+            ]
+        )
 
         self.dataset = torchvision.datasets.MNIST(
             root=root,
@@ -54,7 +47,7 @@ class MNISTDataset(BaseDataset[
             download=True,
         )
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.dataset)
 
     def __getitem__(self, index: int) -> MNISTDatasetItem:
@@ -63,10 +56,10 @@ class MNISTDataset(BaseDataset[
             target=self.dataset[index][1],
         )
 
-    def ident(self):
+    def ident(self) -> str:
         return "MNIST"
 
-    def set_seed(self, seed: int, shuffle: bool = True):
+    def set_seed(self, seed: int, shuffle: bool = True) -> None:
         return
 
     def collate(self, batch: list[MNISTDatasetItem]) -> MNISTDatasetBatch:
@@ -86,9 +79,7 @@ class MNISTDataset(BaseDataset[
             assert batch is None
             tensors = [None, None]
 
-        broadcast_tensors = broadcast_data(
-            tensors=tensors, dtype=torch.float16, topology=topology
-        )
+        broadcast_tensors = broadcast_data(tensors=tensors, dtype=torch.float16, topology=topology)
 
         return MNISTDatasetBatch(
             inputs=broadcast_tensors[0],

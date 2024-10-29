@@ -2,29 +2,29 @@ import os
 import random
 import sys
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Callable, Dict, Generic, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Callable, ContextManager, Dict, Generic, List, Optional, Tuple, TypeVar, Union
 
 import torch
 
-from scaling.core.data import BaseDatasetBatchGeneric
+from scaling.core.context import BaseContext, DeterminedBaseContext
+from scaling.core.data import (
+    BaseDataset,
+    BaseDatasetBatchGeneric,
+    DataLoader,
+)
 from scaling.core.logging import DeterminedLogger, logger
-from scaling.core.nn import ParallelSelfAttention
+from scaling.core.logging.tensor_statistics_recorder import TensorStatisticsRecorder
+from scaling.core.nn import ParallelModule, ParallelSelfAttention
 from scaling.core.nn.parallel_module import (
     BaseLossInputGeneric,
     EvaluationStepOutput,
     TrainStepOutput,
 )
+from scaling.core.optimizer import BaseOptimizer
 from scaling.core.topology import Topology
-
-from ..context import BaseContext, DeterminedBaseContext
-from ..data import (
-    BaseDataset,
-    DataLoader,
-)
-from ..nn import ParallelModule
-from ..optimizer import BaseOptimizer
-from .trainer_config import TrainerConfig
+from scaling.core.trainer.trainer_config import TrainerConfig
 
 BaseContextGeneric = TypeVar("BaseContextGeneric", bound=BaseContext)
 ParallelModuleGeneric = TypeVar("ParallelModuleGeneric", bound=ParallelModule)
@@ -137,6 +137,15 @@ class BaseTrainer(Generic[BaseContextGeneric, ParallelModuleGeneric]):
                 "IF YOU WANT TO KEEP ALL OPTIMIZER STATES, SET THIS FLAG TO FALSE."
             )
             pass
+
+        if self.config.tensor_statistics_recorder_config is not None:
+            self.tensor_statistics_recorder: Optional[TensorStatisticsRecorder] = TensorStatisticsRecorder(
+                config=self.config.tensor_statistics_recorder_config,
+                context=self.context,
+                model=self.parallel_module,
+            )
+        else:
+            self.tensor_statistics_recorder = None
 
     def save_checkpoint(self, save_dir: Optional[Path] = None) -> Path:
         save_dir = save_dir or self.config.save_dir
@@ -281,8 +290,18 @@ class BaseTrainer(Generic[BaseContextGeneric, ParallelModuleGeneric]):
     def run_training(self, return_metrics: bool = False) -> Optional[List[Dict[str, Union[float, int]]]]:
         metrics_list: List[Dict[str, Any]] = list()
         while self.context.iterations < (self.config.train_iterations or 0):
+            # Recorder context manager
+            recorder_context: ContextManager[Any] = nullcontext()
+            if (
+                self.tensor_statistics_recorder
+                and self.context.iterations % self.tensor_statistics_recorder.config.interval == 0
+            ):
+                recorder_context = self.tensor_statistics_recorder.trace()
+
             # model train step
-            train_step_output = self.train_step()
+            with recorder_context:
+                train_step_output = self.train_step()
+
             # save checkpoint
             if (
                 self.config.save_interval is not None
@@ -445,8 +464,18 @@ class DeterminedBaseTrainer(BaseTrainer[DeterminedBaseContextGeneric, ParallelMo
             if self.context._use_determined and self.context.determined_profiler:
                 self.context.determined_profiler.update_batch_idx(self.context.iterations)
 
+            # Recorder context manager
+            recorder_context: ContextManager[Any] = nullcontext()
+            if (
+                self.tensor_statistics_recorder
+                and self.context.iterations % self.tensor_statistics_recorder.config.interval == 0
+            ):
+                recorder_context = self.tensor_statistics_recorder.trace()
+
             # model train step
-            train_step_output = self.train_step()
+            with recorder_context:
+                train_step_output = self.train_step()
+
             # check for preemption
             if self.context._use_determined:
                 assert self.context.determined_context is not None
@@ -494,14 +523,15 @@ class DeterminedBaseTrainer(BaseTrainer[DeterminedBaseContextGeneric, ParallelMo
             assert info is not None
             trial = client.get_trial(info.trial.trial_id)
             checkpoints = trial.get_checkpoints(
-                sort_by=det.experimental.client.CheckpointSortBy.BATCH_NUMBER,
-                order_by=det.experimental.client.CheckpointOrderBy.ASC,
+                sort_by=client.CheckpointSortBy.BATCH_NUMBER,
+                order_by=client.OrderBy.ASC,
             )
 
             # Attempt to delete every thing that has not been saved intentionally
             # except by the last step because we need this for resuming paused trainings.
 
             for checkpoint in checkpoints[:-1]:
+                assert checkpoint.metadata is not None
                 if checkpoint.metadata["steps_completed"] % self.config.save_interval != 0:
                     logger.warning(
                         f"Delete determined checkpoint {checkpoint.uuid} "

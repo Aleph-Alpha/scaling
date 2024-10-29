@@ -68,20 +68,24 @@
         "learning_rate_decay_iters": 0,
         "learning_rate_warmup_steps": 0
     },
-    "embedding_learning_rate_scheduler": {
-        "learning_rate": 0.0,
-        "learning_rate_minimum": 0.0,
-        "learning_rate_decay_style": "cosine",
-        "learning_rate_decay_iters": 0,
-        "learning_rate_warmup_steps": 0
-    },
     "training": {
         "weight_decay": 0.0001,
-        "finetune": false,
-        "finetunable_parameters": null,
-        "parameters_exclude": null,
-        "use_separate_lr_on_embeddings": false
+        "allow_missing_params_in_optimizer": false,
     },
+    "training_groups": [
+        {
+            "group_name": "param_group",
+            "parameters_include": [ ],
+            "parameters_exclude": [ ],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.1,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ],
     "trainer": {
         "save_dir": null,
         "save_interval": null,

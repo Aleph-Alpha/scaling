@@ -14,6 +14,19 @@ def overwrite_recursive(d: dict, d_new: dict) -> None:
             if k not in d:
                 d[k] = dict()
             overwrite_recursive(d[k], d_new[k])
+
+        elif isinstance(v, list) and k == "training_groups":
+            if k not in d:
+                d[k] = []
+
+            add_length = len(v) - len(d[k])
+            if add_length > 0:
+                for _ in range(add_length):
+                    d[k].append({})
+
+            for idx in range(len(v)):
+                overwrite_recursive(d[k][idx], d_new[k][idx])
+
         else:
             d[k] = v
 

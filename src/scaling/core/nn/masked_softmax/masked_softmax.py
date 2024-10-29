@@ -21,6 +21,10 @@ class MaskedSoftmaxTorch(torch.nn.Module):
         if self.config.scale != 1.0:
             x = x * self.config.scale
 
+        # Before modifying x in-place, we need to clone it if it is a view
+        if x._is_view():
+            x = x.clone()
+
         x.masked_fill_(mask.to(x.device), -10000.0)
         probs = self.softmax(x)
 

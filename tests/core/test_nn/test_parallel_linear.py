@@ -1,5 +1,3 @@
-from typing import Optional, Union
-
 import pytest
 import torch
 
@@ -11,18 +9,17 @@ from scaling.core import (
 )
 from scaling.core.runner.launch_config import LaunchConfig
 from scaling.core.utils.port import find_free_port
-
-from ..utils import dist_launcher
+from tests.core.utils import dist_launcher
 
 
 def run_test_parallel_linear(
     return_dict: dict,
-    model_parallel_size: Optional[int],
+    model_parallel_size: int | None,
     in_features: int,
     out_features: int,
     bias: bool,
     linear_layer_type: torch.autograd.Function,
-    bitfit_bias_name: Optional[str],
+    bitfit_bias_name: str | None,
 ):
     """
     function implementing the behavior of training for one single gpu / process
@@ -50,7 +47,7 @@ def run_test_parallel_linear(
 
     # Test ColumnParallelLinear case
     if linear_layer_type == ColumnParallelLinear:
-        parallel_linear: Union[ColumnParallelLinear, RowParallelLinear] = ColumnParallelLinear(
+        parallel_linear: ColumnParallelLinear | RowParallelLinear = ColumnParallelLinear(
             in_features=in_features,
             out_features=out_features,
             bias=bias,
@@ -136,6 +133,7 @@ def run_test_parallel_linear(
         ), f"output from parallel implementation and default implementation differs with delta of {delta}"
 
 
+@pytest.mark.parallel_linear
 @pytest.mark.parametrize("model_parallel_size", [1, 2])
 @pytest.mark.parametrize("in_features", [1, 8, 17, 32])
 @pytest.mark.parametrize("out_features", [1, 8, 17, 32])

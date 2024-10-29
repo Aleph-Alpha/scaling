@@ -14,8 +14,7 @@ from scaling.core import (
     Topology,
     TopologyConfig,
 )
-
-from ..utils import assert_nested_dicts_equal
+from tests.core.utils import assert_nested_dicts_equal
 
 
 def get_topology():
@@ -31,6 +30,7 @@ def get_topology():
     )
 
 
+@pytest.mark.short
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_adamw(tmp_path: Path, dtype):
     """
@@ -161,6 +161,7 @@ def test_adamw(tmp_path: Path, dtype):
     assert (linear2_bias != model.linear2.bias).any()
 
 
+@pytest.mark.short
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("zero", [True, False])
 def test_refresh_optimizer_after_model_change(dtype, zero):

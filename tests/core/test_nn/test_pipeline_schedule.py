@@ -9,6 +9,7 @@ from scaling.core import (
 )
 
 
+@pytest.mark.nn_rest
 @pytest.mark.parametrize("pipe_parallel_size", [1, 2, 7, 16, 32])
 @pytest.mark.parametrize("gradient_accumulation_steps", [1, 2, 7, 16, 32])
 def test_pipeline_train_schedule(
@@ -42,6 +43,7 @@ def test_visualize_train_profile(tmp_path: Path):
     image.save(str(tmp_path / "profile.png"))
 
 
+@pytest.mark.nn_rest
 @pytest.mark.parametrize("pipe_parallel_size", [1, 2, 7, 16, 32])
 def test_pipeline_inference_schedule(tmp_path: Path, pipe_parallel_size: int):
     # visualize() iterates over pipe parallel ranks.

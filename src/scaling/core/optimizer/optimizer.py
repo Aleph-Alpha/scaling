@@ -7,23 +7,23 @@ from typing import Any, Dict, Generator, List, Union
 import torch
 
 from scaling.core.logging import logger
-
-from ..nn.parameter_meta import CoreParameterMeta
-from ..topology import Topology
-from ..utils.param_merge import (
-    merge_parameter,
-    split_parameter,
-)
-from .allreduce import allreduce_no_retain
-from .base import BaseOptimizer, BaseOptimizerState, OptimizerStepOutput
-from .loss_scaler import LossScaler, LossScalerState
-from .optimizer_config import OptimizerConfig
-from .parameter_group import (
+from scaling.core.nn.parameter_meta import CoreParameterMeta
+from scaling.core.optimizer.allreduce import allreduce_no_retain
+from scaling.core.optimizer.base import BaseOptimizer, BaseOptimizerState, OptimizerStepOutput
+from scaling.core.optimizer.loss_scaler import LossScaler, LossScalerState
+from scaling.core.optimizer.optimizer_config import OptimizerConfig
+from scaling.core.optimizer.parameter_group import (
     NCCL_START_ALIGNMENT_FACTOR,
     OptimizerParamGroup,
     ParameterGroupState,
     flatten_dense_tensors_aligned,
     get_data_parallel_partitions,
+    get_new_optimizer_groups_by_lr_gain_per_param,
+)
+from scaling.core.topology import Topology
+from scaling.core.utils.param_merge import (
+    merge_parameter,
+    split_parameter,
 )
 
 
@@ -40,12 +40,17 @@ class Optimizer(BaseOptimizer):
         config: OptimizerConfig,
         parameter_groups: List[OptimizerParamGroup],
         topology: Topology,
+        scale_backward_by_grad_acc: bool = True,
     ) -> None:
         """
         Wrapper around a torch Optimizer taking care of parallelization
         """
+
         self.config = config
-        self.parameter_groups = parameter_groups
+        self.parameter_groups = get_new_optimizer_groups_by_lr_gain_per_param(
+            parameter_groups=parameter_groups, topology=topology
+        )
+
         self.topology = topology
 
         self._assert_no_parameter_duplicates()
@@ -66,6 +71,8 @@ class Optimizer(BaseOptimizer):
         self.step_index: int = 0
 
         self.loss_scaler = LossScaler(config=config.loss_scaler, parameter_groups=self.parameter_groups)
+
+        self.scale_backward_by_grad_acc = scale_backward_by_grad_acc
 
     def _assert_no_parameter_duplicates(self) -> None:
         counter: collections.Counter = collections.Counter()
@@ -98,7 +105,7 @@ class Optimizer(BaseOptimizer):
         """
         # scale for gradient accumulation steps
         loss = loss.float()
-        if self.topology.config.gradient_accumulation_steps > 1:
+        if self.topology.config.gradient_accumulation_steps > 1 and self.scale_backward_by_grad_acc:
             loss = loss / self.topology.config.gradient_accumulation_steps
 
         loss = self.loss_scaler.scale_loss(loss=loss)

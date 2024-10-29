@@ -8,8 +8,7 @@ from scaling.core.runner.launch_config import LaunchConfig
 from scaling.core.utils.port import find_free_port
 from scaling.transformer.context import TransformerConfig
 from scaling.transformer.train import main
-
-from .utils import dist_launcher
+from tests.core.utils import dist_launcher
 
 
 def load_full_separated_checkpoint(checkpoint_file: Path):
@@ -66,13 +65,18 @@ def construct_basic_training_config(
             },
             "zero": True,
         },
-        "learning_rate_scheduler": {
-            "learning_rate": 0.01,
-            "learning_rate_minimum": 0.0,
-            "learning_rate_decay_style": "cosine",
-            "learning_rate_warmup_steps": 2,
-            "learning_rate_decay_iters": 10,
-        },
+        "training_groups": [
+            {
+                "group_name": "param_group",
+                "learning_rate_scheduler": {
+                    "learning_rate": 0.01,
+                    "learning_rate_minimum": 0.0,
+                    "learning_rate_decay_style": "cosine",
+                    "learning_rate_warmup_steps": 2,
+                    "learning_rate_decay_iters": 10,
+                },
+            }
+        ],
         "trainer": {
             "save_dir": str(cache_dir),
             "save_interval": 6,
@@ -80,9 +84,7 @@ def construct_basic_training_config(
             "train_iterations": 10,
             "assert_checkpoint_loaded": False,
         },
-        "training": {
-            "parameters_exclude": [],
-        },
+        "training": {},
         "logger": {"log_level": "debug", "log_dir": str(cache_dir / "logs")},
         "profiler": {"profile_steps": 2, "profile_start_at_step": 1},
         "data": data_config,
@@ -114,6 +116,7 @@ def run_test_finetuning(return_dict: dict, config_dict: dict):
     return_dict["losses"] = losses
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -195,8 +198,20 @@ def test_transformer_softprompt_finetuning(
     # softprompt specific
     config_dict["transformer_architecture"]["softprompt_config"] = {"name": "finetuning", "n_tokens": 8}
 
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ["finetuning"]
+    config_dict["training"]["allow_missing_params_in_optimizer"] = True
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ["finetuning"],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
 
     config_loaded = TransformerConfig.from_dict(config_dict)
 
@@ -258,6 +273,7 @@ def test_transformer_softprompt_finetuning(
     assert softprompt_parameter_count > 0, "there have been no softprompt finetuned parameters found"
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -353,8 +369,20 @@ def test_transformer_adapter_finetuning(
         "init_std": 0.1,
     }
 
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ["finetuning"]
+    config_dict["training"]["allow_missing_params_in_optimizer"] = True
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ["finetuning"],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
 
     config_loaded = TransformerConfig.from_dict(config_dict)
 
@@ -410,6 +438,7 @@ def test_transformer_adapter_finetuning(
             assert (baseline[k] == trained_global_step2[k]).all(), f"parameter '{k}' was trained"
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -484,8 +513,20 @@ def test_transformer_bitfit_finetuning(
     # bitfit specific
     config_dict["transformer_architecture"]["bitfit_bias_config"] = {"name": "finetuning"}
 
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ["finetuning"]
+    config_dict["training"]["allow_missing_params_in_optimizer"] = True
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ["finetuning"],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
 
     # allowed_missing_keys_in_checkpoint
     config_dict["trainer"]["allowed_missing_keys_in_checkpoint"] = [
@@ -553,6 +594,7 @@ def test_transformer_bitfit_finetuning(
             assert (baseline[k] == trained_global_step2[k]).all(), f"parameter '{k}' was trained"
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -599,8 +641,20 @@ def test_transformer_finetuning_with_ignore_keys_in_checkpoint(
     config_dict["trainer"]["load_context"] = False
     config_dict["trainer"]["save_interval"] = 2
     config_dict["trainer"]["train_iterations"] = 4
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ignore_keys_in_checkpoint
+    config_dict["training"]["allow_missing_params_in_optimizer"] = True
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ignore_keys_in_checkpoint,
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
     config_loaded = TransformerConfig.from_dict(config_dict)
     _ = dist_launcher(
         run_func=run_test_finetuning,

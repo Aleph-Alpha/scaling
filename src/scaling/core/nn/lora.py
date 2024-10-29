@@ -24,7 +24,7 @@ class ParallelLoRa(torch.nn.Module):
         bias: bool = False,
         alpha: int = 1,
         dtype: torch.dtype = torch.float32,
-        kaiming_a: Optional[float] = 1.0e-5,
+        kaiming_a: float = 1.0e-5,
         device: Optional[torch.device] = None,
         dropout: Optional[float] = None,
         topology: Optional[Topology] = None,

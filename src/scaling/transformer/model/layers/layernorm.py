@@ -4,14 +4,17 @@ from scaling.core import (
     Topology,
     get_norm,
 )
-
-from ...context.config import TransformerArchitectureConfig
-from .base import TransformerLayerBaseIO, TransformerLayerIO
+from scaling.transformer.context.config import TransformerArchitectureConfig
+from scaling.transformer.model.layers.base import TransformerLayerBaseIO, TransformerLayerIO
 
 
 class LayerNormWrapper(TransformerLayerBaseIO):
     def __init__(
-        self, architecture_config: TransformerArchitectureConfig, layer_index: int, topology: Topology | None = None
+        self,
+        architecture_config: TransformerArchitectureConfig,
+        layer_index: int,
+        topology: Topology | None = None,
+        umup_on_residual: bool | None = None,
     ):
         super().__init__()
         self.topology = topology
@@ -25,6 +28,7 @@ class LayerNormWrapper(TransformerLayerBaseIO):
             dtype=architecture_config.precision.dtype,
             bitfit_bias_name=bitfit_bias_name,
             topology=topology,
+            umup_on_residual=umup_on_residual,
         )
 
         self.layer_index = layer_index

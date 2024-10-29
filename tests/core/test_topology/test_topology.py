@@ -2,10 +2,10 @@ import pytest
 from pydantic import ValidationError
 
 from scaling.core.topology import Topology, TopologyConfig
+from tests.core.utils import assert_nested_dicts_equal
 
-from ..utils import assert_nested_dicts_equal
 
-
+@pytest.mark.short
 @pytest.mark.parametrize(
     "config_input,expected_config,raises_error",
     [

@@ -2,6 +2,7 @@ from .config import (
     LearningRateSchedulerConfig,
     OptimizerConfig,
     SoftpromptConfig,
+    TrainingGroupConfig,
     TransformerArchitectureConfig,
     TransformerConfig,
 )

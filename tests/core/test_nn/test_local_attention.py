@@ -6,6 +6,7 @@ import torch
 from scaling.core import MaskedSoftmaxConfig, MaskedSoftmaxKernel, ParallelSelfAttention, RelativePositionEmbeddingType
 
 
+@pytest.mark.transformer_flash_attn
 @pytest.mark.parametrize("num_kv_heads", [None, 2, 4, 8, 16])
 @pytest.mark.parametrize("num_local_attention_heads", [2, 4, 8, 12, 16])
 @pytest.mark.parametrize("local_attention_window_size", [64, 256, 1024])

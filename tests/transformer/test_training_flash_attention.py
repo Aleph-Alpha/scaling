@@ -7,11 +7,11 @@ import torch
 
 from scaling.core.utils.port import find_free_port
 from scaling.transformer.context import TransformerConfig
+from tests.core.utils import dist_launcher
 from tests.transformer.test_training import run_test_training
 
-from .utils import dist_launcher
 
-
+@pytest.mark.training_variants
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -82,23 +82,18 @@ def test_flash_attention_training(
             },
             "zero": True,
         },
-        "learning_rate_scheduler": {
-            "learning_rate": 0.1,
-            "learning_rate_minimum": 0.0,
-            "learning_rate_decay_style": "cosine",
-            "learning_rate_warmup_steps": 2,
-            "learning_rate_decay_iters": 10,
-        },
-        "embedding_learning_rate_scheduler": {
-            "learning_rate": 0.01,
-            "learning_rate_minimum": 0.0,
-            "learning_rate_decay_style": "cosine",
-            "learning_rate_warmup_steps": 2,
-            "learning_rate_decay_iters": 10,
-        },
-        "training": {
-            "use_separate_lr_on_embeddings": use_separate_lr_on_embeddings,
-        },
+        "training_groups": [
+            {
+                "group_name": "param_group",
+                "learning_rate_scheduler": {
+                    "learning_rate": 0.01,
+                    "learning_rate_minimum": 0.0,
+                    "learning_rate_decay_style": "cosine",
+                    "learning_rate_warmup_steps": 2,
+                    "learning_rate_decay_iters": 10,
+                },
+            }
+        ],
         "trainer": {
             "save_dir": str(tmp_path),
             "save_interval": 6,

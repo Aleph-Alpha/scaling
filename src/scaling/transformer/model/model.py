@@ -17,17 +17,15 @@ from scaling.core import (
 )
 from scaling.core.logging import logger
 from scaling.core.nn.parallel_module.buffers import BufferType
-from scaling.transformer.data.text_dataset_batch import TextDatasetBatch
-from scaling.transformer.data.utils import remove_cumulative_seq_lengths_padding
-
-from ..context import (
-    LearningRateSchedulerConfig,
+from scaling.transformer.context import (
     OptimizerConfig,
+    TrainingGroupConfig,
     TransformerArchitectureConfig,
     TransformerContext,
 )
-from ..context.config import TrainingConfig
-from .layers import (
+from scaling.transformer.data.text_dataset_batch import TextDatasetBatch
+from scaling.transformer.data.utils import remove_cumulative_seq_lengths_padding
+from scaling.transformer.model.layers import (
     EmbeddingInput,
     LayerNormWrapper,
     TransformerEmbeddingHead,
@@ -38,42 +36,6 @@ from .layers import (
 )
 
 NamedParameterMeta: TypeAlias = tuple[str, torch.Tensor, CoreParameterMeta]
-
-
-def loss_function(output: TransformerLayerIO, batch: TextDatasetBatch) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """
-    Calculates cross entropy loss for every probability distribution in the output activations and the target token ids.
-    Returns the average loss for this batch as well as the accuracy.
-    """
-    assert (
-        batch.target_token_ids is not None
-    ), "target_token_ids not set in batch; you may want to revisit the implementation of Batch.only_targets()"
-    assert (
-        batch.loss_weights is not None
-    ), "loss_weights not set in batch; you may want to revisit the implementation of Batch.only_targets()"
-
-    # Flatten Tensors
-    loss_weights_flatten = batch.loss_weights.float().flatten()
-    output_activations_flatten = output.activations.float().reshape(-1, output.activations.shape[-1])
-    target_token_ids_flatten = batch.target_token_ids.flatten()
-
-    # Get flattened cross entropy losses
-    losses = torch.nn.functional.cross_entropy(
-        output_activations_flatten,
-        target=target_token_ids_flatten,
-        reduction="none",
-    )
-    # Average of losses
-    loss = torch.sum(losses * loss_weights_flatten) / loss_weights_flatten.sum()
-
-    # Get the loss mask from the loss weights
-    loss_mask_flatten: torch.Tensor = loss_weights_flatten > 0
-    loss_mask_flatten = loss_mask_flatten.float()
-
-    accuracy = (output_activations_flatten.argmax(-1) == target_token_ids_flatten).float()
-    accuracy = torch.sum(accuracy * loss_mask_flatten) / loss_mask_flatten.sum()
-
-    return loss, {"accuracy": accuracy}
 
 
 def metrics_aggregation_fn(topology: Topology, metrics: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
@@ -130,6 +92,9 @@ def get_transformer_layer_specs(
 
     layer_specs: list[Union[TiedLayerSpec, LayerSpec]] = []
 
+    if architecture_config.umup.enable:
+        assert not architecture_config.weight_tying, "u-mup and weight tying are not compatible"
+
     # ---------------------embedding layer---------------------------
     tied_weight_attributes = list()
     if architecture_config.weight_tying:
@@ -157,7 +122,6 @@ def get_transformer_layer_specs(
         )
 
     # ----------------------transformer layers------------------------
-
     for layer_index in range(architecture_config.num_layers):
         layer_specs.append(
             LayerSpec(
@@ -177,31 +141,34 @@ def get_transformer_layer_specs(
             architecture_config=architecture_config,
             topology=topology,
             layer_index=architecture_config.num_layers,  # this will be the layer following the last transformer layer
+            umup_on_residual=False,
         )
     )
 
     # ----------------------LM head layer-----------------------------
+    if architecture_config.lm_head:
+        if architecture_config.weight_tying:
+            layer_specs.append(
+                TiedLayerSpec(
+                    module_class=TransformerLMHeadTied,
+                    key="embedding_tying",
+                    tied_weight_attributes=tied_weight_attributes,
+                    architecture_config=architecture_config,
+                    topology=topology,
+                    init_method=init_method,
+                )
+            )
+        else:
+            layer_specs.append(
+                LayerSpec(
+                    module_class=TransformerLMHead,
+                    architecture_config=architecture_config,
+                    topology=topology,
+                    init_method=init_method,
+                )
+            )
 
-    if architecture_config.weight_tying:
-        layer_specs.append(
-            TiedLayerSpec(
-                module_class=TransformerLMHeadTied,
-                key="embedding_tying",
-                tied_weight_attributes=tied_weight_attributes,
-                architecture_config=architecture_config,
-                topology=topology,
-                init_method=init_method,
-            )
-        )
-    else:
-        layer_specs.append(
-            LayerSpec(
-                module_class=TransformerLMHead,
-                architecture_config=architecture_config,
-                topology=topology,
-                init_method=init_method,
-            )
-        )
+    # ----------------------EmbeddingHead layer-----------------------------
     if architecture_config.embedding_head_config is not None:
         layer_specs.append(
             LayerSpec(
@@ -210,8 +177,6 @@ def get_transformer_layer_specs(
                 topology=topology,
             )
         )
-
-    # ----------------------------------------------------------------
 
     return layer_specs
 
@@ -223,7 +188,8 @@ def init_model(
     # instantiate transformer model
 
     layer_specs = get_transformer_layer_specs(
-        architecture_config=context.config.transformer_architecture, topology=context.topology
+        architecture_config=context.config.transformer_architecture,
+        topology=context.topology,
     )
     model = TransformerParallelModule(
         layer_specs=layer_specs,
@@ -232,26 +198,33 @@ def init_model(
         use_continuous_recommunication=use_continuous_recommunication,
     )
 
+    if context.config.transformer_architecture.umup.enable:
+        if context.config.transformer_architecture.umup.normalize_depth_to_num_layers:
+            depth = context.config.transformer_architecture.num_layers
+        else:
+            depth = 2 * context.config.transformer_architecture.num_layers
+        model.umup_setup(
+            effective_batch_size=context.config.topology.global_batch_size
+            * context.config.transformer_architecture.sequence_length,
+            depth=depth,
+            avg_sequence_length=context.config.transformer_architecture.sequence_length,
+            allow_non_umup_params=context.config.transformer_architecture.umup.allow_non_umup_params,
+        )
+
     return model
 
 
 def get_parameter_groups(
     context: TransformerContext,
     model: TransformerParallelModule,
-    learning_rate_scheduler_config: LearningRateSchedulerConfig | None = None,
-    embedding_learning_rate_scheduler_config: LearningRateSchedulerConfig | None = None,
 ) -> list[OptimizerParamGroup]:
-    if learning_rate_scheduler_config is None:
-        learning_rate_scheduler_config = context.config.learning_rate_scheduler
-
-    if embedding_learning_rate_scheduler_config is None:
-        embedding_learning_rate_scheduler_config = context.config.embedding_learning_rate_scheduler
-
-    embedding_weight_decay, parameters_no_weight_decay, parameters_weight_decay = _extract_parameters(
-        context.config.training, model.named_parameters_with_meta()
+    parameters_groups = _extract_parameters(
+        context.config.training_groups,
+        model.named_parameters_with_meta(),
+        context.config.training.allow_missing_params_in_optimizer,
     )
 
-    parameter_counts = [len(parameters_weight_decay), len(parameters_no_weight_decay), len(embedding_weight_decay)]
+    parameter_counts = [len(group[0]) for group in parameters_groups]
     parameter_count_total = sum(parameter_counts)
     parameter_count_total_tensor = torch.tensor([parameter_count_total], dtype=torch.long, device="cuda")
     torch.distributed.all_reduce(parameter_count_total_tensor)
@@ -260,7 +233,7 @@ def get_parameter_groups(
 
     parameter_groups = []
 
-    parameter_set = {p[0] for p in parameters_weight_decay + parameters_no_weight_decay + embedding_weight_decay}
+    parameter_set = {p[0] for (parameters_group, _) in parameters_groups for p in parameters_group}
     logger.warning(f"training parameters: {parameter_set}")
 
     parameter_counts_max_tensor = torch.tensor(
@@ -273,39 +246,19 @@ def get_parameter_groups(
     torch.distributed.all_reduce(parameter_counts_max_tensor, op=torch.distributed.ReduceOp.MAX)
 
     # if at least one rank has a non-empty group we need to add the group everywhere since it hangs otherwise
-    if parameter_counts_max_tensor[0].item() > 0:
-        parameter_groups.append(
-            OptimizerParamGroup(
-                named_parameters_with_meta=parameters_weight_decay,
-                config=OptimizerParamGroupConfig(
-                    name="weight_decay_params",
-                    weight_decay=context.config.training.weight_decay,
-                    learning_rate_scheduler=learning_rate_scheduler_config,
-                ),
+    for idx, (named_parameters_with_meta, training_group_config) in enumerate(parameters_groups):
+        if parameter_counts_max_tensor[idx].item() > 0:
+            parameter_groups.append(
+                OptimizerParamGroup(
+                    named_parameters_with_meta=named_parameters_with_meta,
+                    config=OptimizerParamGroupConfig(
+                        name=training_group_config.group_name,
+                        weight_decay=training_group_config.weight_decay,
+                        independent_weight_decay=training_group_config.independent_weight_decay,
+                        learning_rate_scheduler=training_group_config.learning_rate_scheduler,
+                    ),
+                )
             )
-        )
-    if parameter_counts_max_tensor[1].item() > 0:
-        parameter_groups.append(
-            OptimizerParamGroup(
-                named_parameters_with_meta=parameters_no_weight_decay,
-                config=OptimizerParamGroupConfig(
-                    name="no_weight_decay_params",
-                    weight_decay=0.0,
-                    learning_rate_scheduler=learning_rate_scheduler_config,
-                ),
-            )
-        )
-    if parameter_counts_max_tensor[2].item() > 0:
-        parameter_groups.append(
-            OptimizerParamGroup(
-                named_parameters_with_meta=embedding_weight_decay,
-                config=OptimizerParamGroupConfig(
-                    name="embedding_weight_decay_params",
-                    weight_decay=context.config.training.weight_decay,
-                    learning_rate_scheduler=embedding_learning_rate_scheduler_config,
-                ),
-            )
-        )
 
     # Safety check whether the number of optimizer groups is the same on all ranks
     len_param_groups_tensor_list = [
@@ -327,50 +280,72 @@ def get_parameter_groups(
 
 
 def _extract_parameters(
-    training_config: TrainingConfig, named_parameters_with_meta: list[NamedParameterMeta]
-) -> tuple[list[NamedParameterMeta], list[NamedParameterMeta], list[NamedParameterMeta]]:
-    parameters_weight_decay = []
-    parameters_no_weight_decay = []
-    embeddings_weight_decay = []
-    found_finetunable_parameters = set()
-    for named_param_meta in named_parameters_with_meta:
-        if training_config.finetune:
-            match = _find_matching_param(named_param_meta, training_config.finetunable_parameters)
-            if match is None:
-                continue
-            found_finetunable_parameters.add(match)
+    training_groups: list[TrainingGroupConfig],
+    named_parameters_with_meta: list[NamedParameterMeta],
+    allow_missing_params_in_optimizer: bool,
+) -> list[tuple[list[NamedParameterMeta], TrainingGroupConfig]]:
+    parameters_groups = []
+    parameters_groups_config = []
+    found_group_parameters_list: list[set[str]] = []
 
-        name = named_param_meta[0]
-        if name.endswith(".bias"):
-            parameters_no_weight_decay.append(named_param_meta)
-        elif training_config.use_separate_lr_on_embeddings and name == "embedding.weight":
-            assert not training_config.finetune, "Can not use separate lr on embeddings with finetuning"
-            embeddings_weight_decay.append(named_param_meta)
-        else:
-            parameters_weight_decay.append(named_param_meta)
+    for training_group in training_groups:
+        parameters: list[NamedParameterMeta] = []
+        found_include = set()
 
-    if unmatched_parameters := _find_global_unmatched_parameters(
-        found_finetunable_parameters, training_config.finetunable_parameters
-    ):
-        raise ValueError(f"Unmatched finetunable parameters: {unmatched_parameters}")
-    if parameters_exclude := training_config.parameters_exclude:
-        parameters_weight_decay = _filter_by_param(parameters_exclude, parameters_weight_decay)
-        parameters_no_weight_decay = _filter_by_param(parameters_exclude, parameters_no_weight_decay)
-        embeddings_weight_decay = _filter_by_param(parameters_exclude, embeddings_weight_decay)
-    return (
-        embeddings_weight_decay,
-        parameters_no_weight_decay,
-        parameters_weight_decay,
-    )
+        for named_param_meta in named_parameters_with_meta:
+            if parameters_include := training_group.parameters_include:
+                match = _find_matching_param(named_param_meta, parameters_include)
+                if match is None:
+                    continue
+
+                found_include.add(match)
+
+            parameters.append(named_param_meta)
+
+        if training_group.parameters_include:
+            if unmatched_parameters := _find_global_unmatched_parameters(
+                found_include, training_group.parameters_include
+            ):
+                raise ValueError(f"Unmatched finetunable parameters: {unmatched_parameters}")
+
+        if parameters_exclude := training_group.parameters_exclude:
+            parameters = _filter_by_param(parameters_exclude, parameters)
+
+        parameters_groups.append(parameters)
+        parameters_groups_config.append(training_group)
+        found_group_parameters_list.append({n for (n, _, _) in parameters})
+
+    all_used_parameters: list[str] = []
+    for found_group_parameters in found_group_parameters_list:
+        for parameter in found_group_parameters:
+            if parameter in all_used_parameters:
+                raise ValueError(
+                    f"Parameter '{parameter}' in more then one training_group. Use "
+                    f"'parameters_include' and 'parameters_exclude' to ensure no overlap between training groups."
+                )
+
+            all_used_parameters.append(parameter)
+
+    if not allow_missing_params_in_optimizer:
+        all_params_names: set[str] = {n for (n, _, _) in named_parameters_with_meta}
+        not_used_params = set(all_used_parameters).symmetric_difference(all_params_names)
+
+        if len(not_used_params) > 0:
+            raise ValueError(
+                f"""The following parameters were not added to any optimizer group: {not_used_params}".
+                If this is intended, add the names to 'allow_missing_params_in_optimizer`."""
+            )
+
+    return list(zip(parameters_groups, parameters_groups_config))
 
 
 def _find_global_unmatched_parameters(
-    found_finetunable_parameters: set[str], finetunable_parameters: Sequence[str]
+    found_parameters_include: set[str], parameters_include: Sequence[str]
 ) -> set[str]:
     """
     Returns a set of finetunable parameters that are missing on all ranks
     """
-    local_unmatched_parameters = set(finetunable_parameters) - found_finetunable_parameters
+    local_unmatched_parameters = set(parameters_include) - found_parameters_include
     global_unmatched_parameters: list[set[str]] = [set()] * torch.distributed.get_world_size()
     torch.distributed.all_gather_object(global_unmatched_parameters, local_unmatched_parameters)
     return set.intersection(*global_unmatched_parameters)
@@ -390,19 +365,17 @@ def init_optimizer(
     context: TransformerContext,
     model: TransformerParallelModule,
     optimizer_config: OptimizerConfig | None = None,
-    learning_rate_scheduler_config: LearningRateSchedulerConfig | None = None,
-    embedding_learning_rate_scheduler_config: LearningRateSchedulerConfig | None = None,
 ) -> BaseOptimizer:
     parameter_groups = get_parameter_groups(
         context=context,
         model=model,
-        learning_rate_scheduler_config=learning_rate_scheduler_config,
-        embedding_learning_rate_scheduler_config=embedding_learning_rate_scheduler_config,
     )
+
     optimizer = Optimizer(
         config=(optimizer_config if optimizer_config is not None else context.config.optimizer),
         parameter_groups=parameter_groups,
         topology=context.topology,
+        scale_backward_by_grad_acc=not context.config.transformer_architecture.umup.enable,
     )
 
     return optimizer

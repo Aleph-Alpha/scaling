@@ -7,7 +7,7 @@
 
 from pydantic import Field
 
-from ..config import BaseConfig
+from scaling.core.config import BaseConfig
 
 
 class LossScalerConfig(BaseConfig):

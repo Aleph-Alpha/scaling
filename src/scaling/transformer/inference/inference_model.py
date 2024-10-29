@@ -1,8 +1,10 @@
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+import numpy as np
 import torch
 import yaml
+from tqdm import tqdm
 
 from scaling.core import (
     BaseLayerIO,
@@ -10,14 +12,13 @@ from scaling.core import (
     PipePartitionMethod,
 )
 from scaling.core.nn.parallel_module.inference_module import InferenceModule, RecorderSetting
+from scaling.transformer.context.config import TransformerArchitectureConfig
+from scaling.transformer.data import TextDatasetBatch
 from scaling.transformer.data.inference_settings import InferenceSettings
+from scaling.transformer.inference.sample import sample_argmax
 from scaling.transformer.model.layers.base import TransformerLayerIO
-
-from ..context.config import TransformerArchitectureConfig
-from ..data import TextDatasetBatch
-from ..model.model import get_transformer_layer_specs
-from ..tokenizer import Tokenizer
-from .sample import sample_argmax
+from scaling.transformer.model.model import get_transformer_layer_specs
+from scaling.transformer.tokenizer import Tokenizer
 
 
 class CompletionOutput:
@@ -45,11 +46,28 @@ class TransformerInferenceModule(InferenceModule):
         self.tokenizer = tokenizer
 
     @staticmethod
-    def _parse_config_file(config_file: Path) -> TransformerArchitectureConfig:
+    def _parse_config_file(config_file: Path, use_flash_attention: bool) -> TransformerArchitectureConfig:
         with open(config_file, "r") as f:
             config_dict = yaml.safe_load(f)
 
         architecture_dict = config_dict["transformer_architecture"]
+
+        if use_flash_attention:
+            architecture_dict["masked_softmax"]["kernel"] = "flash_attention"
+        else:
+            architecture_dict["masked_softmax"]["kernel"] = "torch"
+
+        # Set config flag to load in fp8.
+        for k in [
+            "fp8_config_attention",
+            "fp8_config_attention_dense_out",
+            "fp8_config_mlp",
+            "fp8_config_mlp_dense_out",
+            "fp8_config_lm_head",
+        ]:
+            if k in architecture_dict and architecture_dict[k] is not None:
+                architecture_dict[k]["load_in_fp8"] = True
+
         return TransformerArchitectureConfig.from_dict(architecture_dict)
 
     @classmethod
@@ -61,6 +79,7 @@ class TransformerInferenceModule(InferenceModule):
         pipe_partition_overwrite: list[int] | None = None,
         config_file: Path | None = None,
         vocab_file: Path | None = None,
+        use_flash_attention: bool = False,
     ) -> "TransformerInferenceModule":
         """Load a model from a checkpoint directory as inference module. By default assumes weights,
         model config and vocab file to be present in checkpoint directory.
@@ -73,7 +92,7 @@ class TransformerInferenceModule(InferenceModule):
         assert config_file.is_file(), "Config file not found"
         assert vocab_file.is_file(), "Vocab file not found"
 
-        architecture_config = TransformerInferenceModule._parse_config_file(config_file)
+        architecture_config = TransformerInferenceModule._parse_config_file(config_file, use_flash_attention)
         tokenizer = Tokenizer.from_file(str(vocab_file))
         layer_specs = get_transformer_layer_specs(architecture_config=architecture_config)
         model = cls(
@@ -83,6 +102,15 @@ class TransformerInferenceModule(InferenceModule):
             pipe_partition_overwrite=pipe_partition_overwrite,
             tokenizer=tokenizer,
         )
+
+        if architecture_config.umup.enable:
+            # batch size only matters for backward pass behavior, so can be set to 1
+            model.umup_setup(
+                effective_batch_size=1,
+                depth=architecture_config.num_layers,
+                avg_sequence_length=architecture_config.sequence_length,
+            )
+
         model.load_checkpoint(checkpoint_dir)
         return model
 
@@ -261,3 +289,85 @@ class TransformerInferenceModule(InferenceModule):
                 sample_fn=sample_fn,
                 stop_tokens=stop_tokens,
             )
+
+    @staticmethod
+    def _create_embedding_text_dataset(
+        input_tokens: list[list[int]], instruction_length: int, pad_token_id: int, max_length: int
+    ) -> TextDatasetBatch:
+        loss_weights = []
+        input_tokens_padded = []
+        for row in input_tokens:
+            loss_weight = torch.cat(
+                (
+                    torch.zeros(instruction_length),
+                    torch.ones(len(row) - instruction_length),
+                    torch.zeros(max_length - len(row)),
+                )
+            )
+
+            padded_tokens = torch.cat((torch.tensor(row), torch.tensor([pad_token_id] * (max_length - len(row)))))
+
+            loss_weights.append(loss_weight)
+            input_tokens_padded.append(padded_tokens)
+
+        position_ids = torch.stack([torch.arange(0, max_length) for _ in range(len(input_tokens))]).cuda()
+
+        return TextDatasetBatch(
+            input_token_ids=torch.stack(input_tokens_padded).int().cuda(),
+            loss_weights=torch.stack(loss_weights).int().cuda(),
+            position_ids=position_ids,
+        )
+
+    def encode_corpus(self, corpus: list[str] | str | list[dict[str, str]], **kwargs: Any) -> torch.Tensor | np.ndarray:
+        if isinstance(corpus, list) and isinstance(corpus[0], dict):
+            corpus = [doc["title"] + " " + doc["text"] if "title" in doc else doc["text"] for doc in corpus]  # type: ignore[index]
+        return self.encode(corpus, **kwargs)  # type: ignore[arg-type]
+
+    def encode_queries(self, queries: list[str] | str, **kwargs: Any) -> torch.Tensor | np.ndarray:
+        return self.encode(queries, **kwargs)
+
+    def encode(
+        self,
+        sentences: list[str] | str,
+        batch_size: int = 256,
+        max_length: int = 512,
+        instruction: str = "",
+        convert_to_tensor: bool = False,
+        user_token: str = "<|start_header_id|>user<|end_header_id|>",
+        embed_token: str = "\n<|embed|>\n",
+        pad_token: str = "<|padding|>",
+        **_: Any,
+    ) -> torch.Tensor | np.ndarray:
+        if isinstance(sentences, str):
+            sentences = [sentences]
+        all_embeddings: list[Any] = []
+        assert self.tokenizer, "Tokenizer need to be set to encode embeddings"
+        pad_token_tokenized = self.tokenizer.encode(pad_token)
+        assert len(pad_token_tokenized) == 1, "pad_token was tokenized to more than one token."
+        pad_token_id = pad_token_tokenized[0]
+
+        tokenized_instruction_length = len(self.tokenizer.encode(user_token + instruction + embed_token))
+        for start_index in tqdm(range(0, len(sentences), batch_size), desc="Batches", disable=len(sentences) < 256):
+            input_tokens_unpadded = [
+                self.tokenizer.encode(user_token + instruction + embed_token + s)[:max_length]
+                for s in sentences[start_index : start_index + batch_size]
+            ]
+
+            batch_max_length = max(len(lst) for lst in input_tokens_unpadded)
+            text_dataset = TransformerInferenceModule._create_embedding_text_dataset(
+                input_tokens=input_tokens_unpadded,
+                instruction_length=tokenized_instruction_length,
+                pad_token_id=pad_token_id,
+                max_length=batch_max_length,
+            )
+
+            embeddings = self.forward(text_dataset).activations
+
+            if convert_to_tensor:
+                all_embeddings.append(embeddings)
+            else:
+                all_embeddings.append(embeddings.cpu().to(torch.float32).numpy())
+
+        if convert_to_tensor:
+            return torch.cat(all_embeddings, dim=0).cpu()
+        return np.concatenate(all_embeddings, axis=0)

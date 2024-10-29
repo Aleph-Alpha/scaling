@@ -5,6 +5,7 @@ import pytest
 from .test_training import execute_run_training
 
 
+@pytest.mark.training_legacy
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -21,7 +22,6 @@ from .test_training import execute_run_training
 @pytest.mark.parametrize("legacy_dataset", [True])
 @pytest.mark.parametrize("use_determined", [False])
 @pytest.mark.parametrize("weight_tying", [True])
-@pytest.mark.parametrize("use_separate_lr_on_embeddings", [False])
 @pytest.mark.parametrize("kernel", ["torch"])
 @pytest.mark.parametrize("sequence_parallel", [False])
 def test_transformer_training_legacy(
@@ -36,7 +36,6 @@ def test_transformer_training_legacy(
     legacy_dataset: bool,
     use_determined: bool,
     weight_tying: bool,
-    use_separate_lr_on_embeddings: bool,
     kernel: str,
     sequence_parallel: bool,
 ):
@@ -52,7 +51,7 @@ def test_transformer_training_legacy(
         legacy_dataset,
         use_determined,
         weight_tying,
-        use_separate_lr_on_embeddings,
+        False,
         kernel,
         sequence_parallel,
     )

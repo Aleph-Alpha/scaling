@@ -12,6 +12,7 @@ def mock_topology(device: torch.device) -> MagicMock:
     return topology
 
 
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "topology, device, expected",
     [
@@ -31,6 +32,7 @@ def test_get_device(topology: MagicMock, device: torch.device, expected: torch.d
         )
 
 
+@pytest.mark.unit
 def test_get_device_raises_assertion_error():
     topology = mock_topology(torch.device("cuda:1"))
     device = torch.device("cuda:0")

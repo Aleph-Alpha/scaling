@@ -17,6 +17,7 @@ def seq_length_per_batch_item() -> int:
     return 6
 
 
+@pytest.mark.transformer_flash_attn
 def test_cumulative_seq_lengths_to_dense_attention_mask_causal(
     cumulative_seq_lengths: torch.Tensor, seq_length_per_batch_item: int
 ) -> None:
@@ -56,6 +57,7 @@ def test_cumulative_seq_lengths_to_dense_attention_mask_causal(
     assert torch.equal(attention_mask[:, 0, :, :], expected_result)
 
 
+@pytest.mark.transformer_flash_attn
 def test_cumulative_seq_lengths_to_dense_attention_mask_bidirectional(
     cumulative_seq_lengths: torch.Tensor, seq_length_per_batch_item: int
 ) -> None:
@@ -95,6 +97,7 @@ def test_cumulative_seq_lengths_to_dense_attention_mask_bidirectional(
     assert torch.equal(attention_mask[:, 0, :, :], expected_result)
 
 
+@pytest.mark.transformer_flash_attn
 def test_get_max_seq_length_on_example(cumulative_seq_lengths: torch.Tensor) -> None:
     max_seq_length = get_max_seq_length(cumulative_seq_lengths)
     assert max_seq_length == 6

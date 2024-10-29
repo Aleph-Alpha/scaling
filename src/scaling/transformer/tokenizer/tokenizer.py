@@ -12,12 +12,20 @@ class Tokenizer:
     def __init__(self, tokenizer: HF_Tokenizer) -> None:
         self.tokenizer = tokenizer
 
-        self.eos_token_id: int
-        if self.tokenizer.token_to_id("<|endoftext|>") is None:
-            self.eos_token_id = self.tokenizer.token_to_id("</s>")
-        else:
-            self.eos_token_id = self.tokenizer.token_to_id("<|endoftext|>")
-        assert self.eos_token_id is not None
+        possible_eos_tokens = (  # (order consistent with tokenizer.py in luminous-inference)
+            "<|end_of_text|>",  # llama 3 and 3.1
+            "<|endoftext|>",  # default
+            "</s>",  # llama 2
+        )
+
+        for eos_token in possible_eos_tokens:
+            if self.tokenizer.token_to_id(eos_token) is not None:
+                self.eos_token_id = self.tokenizer.token_to_id(eos_token)
+                break
+        assert hasattr(self, "eos_token_id"), "EOS token not defined for the given tokenizer."
+
+        # padding token is used for padding and as image placeholder. Should be an unused token; eos should be fine.
+        self.padding_token_id = self.eos_token_id
 
     @classmethod
     def from_file(cls, filename: str) -> "Tokenizer":
@@ -69,35 +77,41 @@ def load_tokenizers(tokenizer_file: str | Path) -> tuple[Tokenizer, Tokenizer]:
     # for tasks that require tokenization of text within the prompt or completion (e.g. stop-tokens)
     # a tokenizer is used that does not add a whitespace at the beginning
     tokenizer_definition = json.load(open(tokenizer_file, "r", encoding="UTF-8"))
+    tokenizer_definition_modified = False
 
-    if "llama" not in str(tokenizer_file):
-        if tokenizer_definition["pre_tokenizer"] and tokenizer_definition["pre_tokenizer"]["add_prefix_space"]:
+    if tokenizer_definition["pre_tokenizer"]:
+        # default tokenizer
+        if tokenizer_definition["pre_tokenizer"].get("add_prefix_space", False):
             tokenizer_definition["pre_tokenizer"]["add_prefix_space"] = False
-            tokenizer_as_json_str = json.dumps(tokenizer_definition)
+            tokenizer_definition_modified = True
 
-            tokenizer_no_prefix_space = Tokenizer.from_str(tokenizer_as_json_str)
-        else:
-            tokenizer_no_prefix_space = tokenizer
+        # llama 3
+        if tokenizer_definition["pre_tokenizer"]["type"] == "Sequence":
+            for p in tokenizer_definition["pre_tokenizer"]["pretokenizers"]:
+                if p.get("add_prefix_space", False):
+                    p["add_prefix_space"] = False
+                    tokenizer_definition_modified = True
 
-    else:
-        if tokenizer_definition["pre_tokenizer"] and tokenizer_definition["pre_tokenizer"]["add_prefix_space"]:
-            tokenizer_definition["pre_tokenizer"]["add_prefix_space"] = False
-
+    # llama 2 (guarding heuristics): a hacky way of to turning off additional whitespace logic
+    if tokenizer.tokenizer.token_to_id("<s>") is not None and tokenizer.tokenizer.token_to_id("<unk>") is not None:
         if tokenizer_definition["decoder"] and tokenizer_definition["decoder"]["type"] == "Sequence":
-            # hacky way of treating llama 2
             tokenizer_definition["decoder"]["decoders"] = [
                 d
                 for d in tokenizer_definition["decoder"]["decoders"]
                 if not (d.get("content", "") == " " and d.get("type", "") == "Strip")
             ]
+            tokenizer_definition_modified = True
 
         if tokenizer_definition["normalizer"] and tokenizer_definition["normalizer"]["type"] == "Sequence":
-            # hacky way of treating llama 2
             tokenizer_definition["normalizer"]["normalizers"] = [
                 n for n in tokenizer_definition["normalizer"]["normalizers"] if not (n.get("type", "") == "Prepend")
             ]
+            tokenizer_definition_modified = True
 
+    if tokenizer_definition_modified:
         tokenizer_as_json_str = json.dumps(tokenizer_definition)
         tokenizer_no_prefix_space = Tokenizer.from_str(tokenizer_as_json_str)
+    else:
+        tokenizer_no_prefix_space = tokenizer
 
     return tokenizer, tokenizer_no_prefix_space

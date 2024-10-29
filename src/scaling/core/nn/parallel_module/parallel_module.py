@@ -1,3 +1,6 @@
+import json
+from dataclasses import asdict
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -8,21 +11,26 @@ from typing import (
 )
 
 import torch
+from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils._pytree import tree_map
 
-from scaling.core.topology.topology_config import ActivationCheckpointingType
-
-from ...data import BaseLayerIO, DataLoader
-from ...optimizer import BaseOptimizer
-from ...optimizer.allreduce import allreduce_tensor_in_float32
-from ...profiler import Profiler, ProfilerConfig, SynchronizedTimer
-from ...topology import Topology
-from ..parameter_meta import CoreParameterMeta
-from ..pipeline_schedule import (
+from scaling.core.data import BaseLayerIO, DataLoader
+from scaling.core.nn.parallel_module.activation_checkpointing import _checkpoint_without_reentrant
+from scaling.core.nn.parallel_module.base_layer import (
+    BaseDatasetBatchGeneric,
+    BaseLossInputGeneric,
+)
+from scaling.core.nn.parallel_module.buffers import Buffers, BufferType
+from scaling.core.nn.parallel_module.communicator import PipeCommunicator
+from scaling.core.nn.parallel_module.layer_spec import LayerSpec
+from scaling.core.nn.parallel_module.partitioned_module import PipePartitionedModule
+from scaling.core.nn.parallel_module.tied_layer_index import TiedLayerIndex
+from scaling.core.nn.parameter_meta import CoreParameterMeta
+from scaling.core.nn.pipeline_schedule import (
     PipelineScheduleInference,
     PipelineScheduleTrain,
 )
-from ..pipeline_schedule.instructions import (
+from scaling.core.nn.pipeline_schedule.instructions import (
     InstructionBackwardPass,
     InstructionBase,
     InstructionForwardPass,
@@ -36,16 +44,11 @@ from ..pipeline_schedule.instructions import (
     InstructionSendGrad,
     InstructionStoreMicroBatch,
 )
-from .activation_checkpointing import _checkpoint_without_reentrant
-from .base_layer import (
-    BaseDatasetBatchGeneric,
-    BaseLossInputGeneric,
-)
-from .buffers import Buffers, BufferType
-from .communicator import PipeCommunicator
-from .layer_spec import LayerSpec
-from .partitioned_module import PipePartitionedModule
-from .tied_layer_index import TiedLayerIndex
+from scaling.core.optimizer import BaseOptimizer
+from scaling.core.optimizer.allreduce import allreduce_tensor_in_float32
+from scaling.core.profiler import Profiler, ProfilerConfig, SynchronizedTimer
+from scaling.core.topology import Topology
+from scaling.core.topology.topology_config import ActivationCheckpointingType
 
 
 def get_timer_args(
@@ -174,6 +177,28 @@ class ParallelModule(
                 named_parameters_with_meta.append((parameter_name, parameter, meta))
         return named_parameters_with_meta
 
+    def save_checkpoint(self, dir_: Union[Path, str], separate_file_for_parameters: Optional[list[str]]) -> None:
+        super().save_checkpoint(dir_=dir_, separate_file_for_parameters=separate_file_for_parameters)
+        self.save_parameter_meta(dir_=Path(dir_))
+
+    def save_parameter_meta(self, dir_: Path) -> None:
+        for pipe_coordinate in self._pipe_partition_coordinates:
+            save_path = Path(dir_) / f"parameter_meta_{pipe_coordinate.start}_{pipe_coordinate.end}.json"
+            output_dict = dict()
+            for n, p, m in self.named_parameters_with_meta():
+                state_dict = m.state_dict()
+                state_dict_for_json = {
+                    k: v for k, v in state_dict.items() if k not in ("umup_meta", "tied_layer_indices")
+                }
+                # cast to be json serializable
+                state_dict_for_json["tied_layer_indices"] = list(state_dict["tied_layer_indices"])
+                state_dict_for_json["umup_meta"] = asdict(state_dict["umup_meta"]) if state_dict["umup_meta"] else None
+
+                output_dict[f"layer_{m.layer_index}_{n}"] = state_dict_for_json
+
+            with open(save_path, "w") as f:
+                json.dump(output_dict, f, indent=4)
+
     def broadcast_model(self) -> None:
         """Broadcasts model weights from data parallel rank 0 to all other data parallel ranks."""
         if self.topology is None or not self.topology.is_distributed_initialized:
@@ -181,21 +206,9 @@ class ParallelModule(
 
         for parameter in self._layers.parameters():
             if torch.is_tensor(parameter):
-                # Broadcast duplicated parameters to model parallel.
                 if parameter.core_parameter_meta.is_model_parallel_duplicate:  # type: ignore[attr-defined]
-                    torch.distributed.broadcast(
-                        parameter,
-                        torch.distributed.distributed_c10d.get_global_rank(self.topology.model_parallel_group, 0),
-                        group=self.topology.model_parallel_group,
-                    )
-
-                # Broadcast to data parallel.
-                torch.distributed.broadcast(
-                    parameter,
-                    torch.distributed.distributed_c10d.get_global_rank(self.topology.data_parallel_group, 0),
-                    group=self.topology.data_parallel_group,
-                )
-
+                    _broadcast_parameters(parameter, self.topology.model_parallel_group)
+                _broadcast_parameters(parameter, self.topology.data_parallel_group)
         # Broadcast to tied layers.
         for (
             parameter,
@@ -203,11 +216,13 @@ class ParallelModule(
             pipe_parallel_ranks,
         ) in self.tied_layer_index.local_parameters_and_process_groups():
             if len(pipe_parallel_ranks) > 1:
-                torch.distributed.broadcast(
-                    parameter,
-                    torch.distributed.distributed_c10d.get_global_rank(process_group, 0),  # type: ignore[arg-type]
-                    group=process_group,
-                )
+                _broadcast_parameters(parameter, process_group)  # type: ignore[arg-type]
+
+    def umup_setup(
+        self, effective_batch_size: int, depth: int, avg_sequence_length: int, allow_non_umup_params: bool = False
+    ) -> None:
+        super().umup_setup(effective_batch_size, depth, avg_sequence_length, allow_non_umup_params)
+        self.broadcast_model()  # umup re-initializes weights so we need to sync them again
 
     def get_params_count(self) -> tuple[int, int]:
         """Returns the number of total and unique parameters of a model.
@@ -745,3 +760,8 @@ class ParallelModule(
             if self.topology.is_last_pipe_parallel_rank:
                 assert self.communicator_loss_out is not None
                 self.communicator_loss_out.reset_communication_meta()
+
+
+def _broadcast_parameters(parameter: torch.nn.Parameter, process_group: ProcessGroup) -> None:
+    global_rank = torch.distributed.distributed_c10d.get_global_rank(process_group, 0)
+    torch.distributed.broadcast(parameter.data, global_rank, group=process_group)

@@ -4,9 +4,8 @@ import pytest
 import torch
 
 from scaling.core.utils.port import find_free_port
-
-from ..minimal import MinimalConfig, main
-from ..utils import dist_launcher
+from tests.core.minimal import MinimalConfig, main
+from tests.core.utils import dist_launcher
 
 
 def run_test_training(return_dict: dict, config_dict: dict):
@@ -20,6 +19,7 @@ def run_test_training(return_dict: dict, config_dict: dict):
         return_dict["losses"] = [metric["training/loss"] for metric in metrics_list]
 
 
+@pytest.mark.short
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [

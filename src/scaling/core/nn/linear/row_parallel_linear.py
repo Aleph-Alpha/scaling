@@ -1,16 +1,22 @@
-from typing import Callable, Optional
+from functools import partial
+from typing import Any, Callable, Optional
 
 import torch
 
-from ...topology import Topology
-from ..parameter_meta import (
-    CoreParameterMeta,
-)
-from .utils import (
+from scaling.core.fp8 import FP8LinearConfig, fp8_linear
+from scaling.core.nn.linear.utils import (
     all_reduce,
     all_shard,
     get_device,
 )
+from scaling.core.nn.parameter_meta import (
+    UMUP_WEIGHT_TYPE,
+    CoreParameterMeta,
+    UMuPParameterMeta,
+)
+from scaling.core.nn.scale import scale_bwd, scale_fwd
+from scaling.core.nn.umup import UMuParametrization
+from scaling.core.topology import Topology
 
 
 class RowParallelLinear(torch.nn.Module):
@@ -40,6 +46,9 @@ class RowParallelLinear(torch.nn.Module):
         parallel_input: bool = False,
         parallel_output: bool = False,
         bitfit_bias_name: Optional[str] = None,
+        umup_weight_type: Optional[UMUP_WEIGHT_TYPE] = None,
+        umup_on_residual: Optional[bool] = None,
+        fp8_config: Optional[FP8LinearConfig] = None,
     ) -> None:
         """
         in_features (`int`)
@@ -84,6 +93,7 @@ class RowParallelLinear(torch.nn.Module):
         self.init_method = init_method
         self.parallel_input = parallel_input
         self.parallel_output = parallel_output
+        self.fp8_config = fp8_config
 
         # determine size for active model parallel
         self.model_parallel_size = 1 if self.topology is None else self.topology.config.model_parallel_size
@@ -93,16 +103,25 @@ class RowParallelLinear(torch.nn.Module):
         )
         self.input_features_per_partition = self.in_features // self.model_parallel_size
 
-        # initialize parameters
+        # Initialize weights. When loading in fp8, we create fp8 weights and avoid the init method.
+        self.load_in_fp8 = False
+        weight_dtype = self.dtype
+        if self.fp8_config is not None and self.fp8_config.dtypes_forward is not None and self.fp8_config.load_in_fp8:
+            self.load_in_fp8 = True
+            weight_dtype = self.fp8_config.dtypes_forward.right_dtype.torch_dtype
+
+            def dummy_init_(x: torch.Tensor) -> torch.Tensor:
+                return x
+
+            init_method = dummy_init_
         self.weight = torch.nn.Parameter(
             torch.empty(
                 self.out_features,
                 self.input_features_per_partition,
                 device=self._device,
-                dtype=self.dtype,
+                dtype=weight_dtype,
             )
         )
-        # initialize weights
         init_method(self.weight)
         CoreParameterMeta.register_on_parameter(
             parameter=self.weight,
@@ -137,6 +156,106 @@ class RowParallelLinear(torch.nn.Module):
         else:
             self.bias_name = None
 
+        # umup parameters
+        self.umup_weight_type = umup_weight_type
+        self.umup_on_residual = umup_on_residual
+        self.forward_multiplier: float
+        self.backward_multiplier: float
+        self.weight_grad_multiplier: float
+        self.bias_grad_multiplier: float
+        self._use_umup: bool = False
+
+        if self.fp8_config is None:
+            self._linear = torch.nn.functional.linear
+        elif isinstance(fp8_config, FP8LinearConfig):
+            self._linear = partial(
+                fp8_linear,
+                dtypes_forward=self.fp8_config.torch_dtypes_forward,
+                dtypes_grad_input=self.fp8_config.torch_dtypes_grad_input,
+                dtypes_grad_weight=self.fp8_config.torch_dtypes_grad_weight,
+            )
+        else:
+            raise ValueError(f"Unknown option for fp8_config: {self.fp8_config}.")
+
+    def _standard_forward(self, x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        return self._linear(x, weight)  # bias is excluded here because it gets added after the all-reduce
+
+    def umup_setup(self, effective_batch_size: int, depth: int, **kwargs: Any) -> None:
+        self._use_umup = True
+
+        assert self.umup_weight_type in (
+            UMUP_WEIGHT_TYPE.INPUT_WEIGHT,
+            UMUP_WEIGHT_TYPE.HIDDEN_WEIGHT,
+            UMUP_WEIGHT_TYPE.OUTPUT_WEIGHT,
+        ), "when using u-mup, the weight type of the linear layer needs to be provided as input, hidden or output."
+        assert isinstance(
+            self.umup_on_residual, bool
+        ), "when using u-mup, you need to specify if linear layer is on a residual connection."
+
+        if self.topology is not None:
+            model_parallel_size = self.topology.config.model_parallel_size
+        else:
+            model_parallel_size = 1
+
+        assert hasattr(self.weight, "core_parameter_meta")
+        assert isinstance(self.weight.core_parameter_meta, CoreParameterMeta)
+
+        self.weight.core_parameter_meta.umup_meta = UMuPParameterMeta(
+            weight_type=self.umup_weight_type, on_residual=self.umup_on_residual
+        )
+
+        UMuParametrization.apply_umup_to_weight(
+            self.weight,
+            model_parallel_size=model_parallel_size,
+            effective_batch_size=effective_batch_size,
+            depth=depth,
+            reinitialize=not (self.load_in_fp8),
+        )
+
+        self.forward_multiplier = self.weight.core_parameter_meta.umup_meta.forward_multiplier
+        self.backward_multiplier = self.weight.core_parameter_meta.umup_meta.backward_multiplier
+        self.weight_grad_multiplier = self.weight.core_parameter_meta.umup_meta.grad_multiplier
+
+        if self.bias_name is not None:
+            bias = getattr(
+                self,
+                self.bias_name,
+            )
+
+            assert hasattr(bias, "core_parameter_meta")
+            assert isinstance(bias.core_parameter_meta, CoreParameterMeta)
+
+            bias.core_parameter_meta.umup_meta = UMuPParameterMeta(
+                weight_type=UMUP_WEIGHT_TYPE.BIAS, on_residual=self.umup_on_residual
+            )
+
+            UMuParametrization.apply_umup_to_weight(
+                bias,
+                model_parallel_size=model_parallel_size,
+                effective_batch_size=effective_batch_size,
+                depth=depth,
+            )
+
+            self.bias_grad_multiplier = bias.core_parameter_meta.umup_meta.grad_multiplier
+        else:
+            self.bias_grad_multiplier = 1.0
+
+    def _umup_forward(
+        self, x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # pre-scaling
+        x = scale_bwd(x, self.backward_multiplier)
+        weight = scale_bwd(weight, self.weight_grad_multiplier)
+        bias = scale_bwd(bias, self.bias_grad_multiplier) if bias is not None else None
+
+        # linear forward
+        output = self._standard_forward(x, weight)
+
+        # post-scaling
+        output = scale_fwd(output, self.forward_multiplier)
+
+        return output, bias
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         weight = self.weight
 
@@ -155,7 +274,10 @@ class RowParallelLinear(torch.nn.Module):
         else:
             bias = None
 
-        output_parallel = torch.nn.functional.linear(x_parallel, weight)
+        if self._use_umup:
+            output_parallel, bias = self._umup_forward(x_parallel, weight, bias)
+        else:
+            output_parallel = self._standard_forward(x_parallel, weight)
 
         if self.parallel_output or self.topology is None:
             output = output_parallel

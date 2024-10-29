@@ -9,6 +9,7 @@ from scaling.core import (
 from scaling.core.nn.attention import cumulative_seq_lengths_to_dense_attention_mask
 
 
+@pytest.mark.masked_softmax
 @pytest.mark.skipif((not torch.cuda.is_available()), reason="no cuda available")
 @pytest.mark.parametrize("batch_size", [2, 4, 6])
 @pytest.mark.parametrize("n_heads", [4, 12, 16])

@@ -243,6 +243,15 @@ def dist_init(
 
 def dist_launcher(run_func, world_size, master_port, *func_args, **func_kwargs):
     """Launch processes and gracefully handle failures."""
+    failures, return_dict = _dist_launcher(func_args, func_kwargs, master_port, run_func, world_size)
+
+    if len(failures) > 0:
+        pytest.fail("\n".join(failures), pytrace=False)
+
+    return dict(return_dict)
+
+
+def _dist_launcher(func_args, func_kwargs, master_port, run_func, world_size):
     ctx = torch.multiprocessing.get_context("spawn")
     manager = ctx.Manager()
     return_dict = manager.dict()
@@ -263,7 +272,6 @@ def dist_launcher(run_func, world_size, master_port, *func_args, **func_kwargs):
         )
         p.start()
         processes.append(p)
-
     # Now loop and wait for a test to complete. The spin-wait here isn't a big
     # deal because the number of processes will be O(#GPUs) << O(#CPUs).
     any_done = False
@@ -274,7 +282,6 @@ def dist_launcher(run_func, world_size, master_port, *func_args, **func_kwargs):
                 any_done = True
             if p.exitcode is not None:
                 any_failed = any_failed or (p.exitcode != 0)
-
     if any_failed:
         for p in processes:
             # If the process hasn't terminated, kill it because it hung.
@@ -282,11 +289,9 @@ def dist_launcher(run_func, world_size, master_port, *func_args, **func_kwargs):
                 p.terminate()
             if p.is_alive():
                 p.kill()
-
     # Wait for all other processes to complete
     for p in processes:
         p.join(PROCESS_TIMEOUT)
-
     # Collect exit codes and terminate hanging process
     failures = []
     for rank, p in enumerate(processes):
@@ -300,8 +305,14 @@ def dist_launcher(run_func, world_size, master_port, *func_args, **func_kwargs):
             failures.append(f"Worker {rank} killed by signal {-p.exitcode}")
         elif p.exitcode > 0:
             failures.append(f"Worker {rank} exited with code {p.exitcode}")
+    return failures, return_dict
+
+
+def dist_launcher_runtime_error(run_func, world_size, master_port, *func_args, **func_kwargs):
+    """Launch processes and gracefully handle failures."""
+    failures, return_dict = _dist_launcher(func_args, func_kwargs, master_port, run_func, world_size)
 
     if len(failures) > 0:
-        pytest.fail("\n".join(failures), pytrace=False)
+        raise RuntimeError("\n".join(failures))
 
     return dict(return_dict)

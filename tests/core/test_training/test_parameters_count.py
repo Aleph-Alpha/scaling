@@ -1,16 +1,16 @@
+import pytest
 import torch
 
 from scaling.core import ParallelModule, Topology
 from scaling.core.logging import logger
 from scaling.core.runner.launch_config import LaunchConfig
 from scaling.core.utils.port import find_free_port
-from tests.core.utils import dist_launcher
-
-from ..minimal import (
+from tests.core.minimal import (
     MinimalConfig,
     MinimalContext,
     init_model,
 )
+from tests.core.utils import dist_launcher
 
 
 def init_minimal_example_model(overwrite_config: dict) -> ParallelModule:
@@ -70,6 +70,7 @@ def count_parameters(
     return_dict["unique_params"] = unique_params
 
 
+@pytest.mark.short
 def test_parameter_count():
     """
     Tests if different parallelization layouts of model and pipe parallel size have the same number of unique params

@@ -2,7 +2,7 @@ from typing import Optional, TypeAlias, cast
 
 import torch
 
-from ..topology import Topology
+from scaling.core.topology import Topology
 
 _MAX_DATA_DIM = 8  # maximum dimension of tensors that can be synced
 
@@ -103,6 +103,8 @@ def _check_data_types(tensors: list[torch.Tensor], dtype: torch.dtype) -> None:
 def broadcast_data(tensors: list[Optional[torch.Tensor]], dtype: torch.dtype, topology: Topology) -> list[torch.Tensor]:
     """
     Broadcast data from rank zero of each model parallel group to the members of the same model parallel group.
+    We can not use torch.distributed.broadcast_object_list, because it always needs to copy the tensors over to cpu.
+    This is inefficient and causes memory problems for large tensors.
     :param tensors: list of tensors to broadcast
     :param dtype: the data type of the tensors. This needs to be similar in all tensors
     :param topology: topology to be used

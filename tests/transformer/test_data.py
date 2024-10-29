@@ -10,6 +10,7 @@ from scaling.transformer.data import (
 from scaling.transformer.tokenizer import load_tokenizers
 
 
+@pytest.mark.transformer
 @pytest.mark.parametrize("load_mmap_index_to_memory", [True, False])
 @pytest.mark.parametrize("load_data_item_mmap_index_to_memory", [True, False])
 def test_text_dataset_instantiation(load_mmap_index_to_memory: bool, load_data_item_mmap_index_to_memory: bool):
@@ -25,6 +26,7 @@ def test_text_dataset_instantiation(load_mmap_index_to_memory: bool, load_data_i
     _ = TextDataset.sync_batch_to_model_parallel(topology=None, batch=batch_before_sync)
 
 
+@pytest.mark.transformer
 @pytest.mark.parametrize("load_mmap_index_to_memory", [True, False])
 @pytest.mark.parametrize("load_data_item_mmap_index_to_memory", [True, False])
 @pytest.mark.parametrize("allow_incomplete_sequences_every_n", [0, 4, 8, 256])
@@ -89,6 +91,7 @@ def test_text_dataset_instantiation_max_seq(
     print("")
 
 
+@pytest.mark.transformer
 def test_finetuning_text_dataset_instantiation():
     tokenizer, tokenizer_no_prefix_space = load_tokenizers(Path(__file__).parents[0] / "files" / "alpha-001-128k.json")
     dataset = FinetuningTextDataset(
@@ -103,6 +106,7 @@ def test_finetuning_text_dataset_instantiation():
     _ = FinetuningTextDataset.sync_batch_to_model_parallel(topology=None, batch=batch_before_sync)
 
 
+@pytest.mark.transformer
 def test_finetuning_text_dataset_instantiation_indexed_dataset(tmp_path: Path):
     data_prefix = tmp_path / "dataset"
 
@@ -127,6 +131,7 @@ def test_finetuning_text_dataset_instantiation_indexed_dataset(tmp_path: Path):
     _ = FinetuningTextDataset.sync_batch_to_model_parallel(topology=None, batch=batch_before_sync)
 
 
+@pytest.mark.transformer
 def test_finetuning_chat_dataset_instantiation_indexed_dataset(tmp_path: Path):
     data_path = Path(__file__).parents[0] / "files" / "dataset" / "finetuning_chat.jsonl"
 
@@ -144,6 +149,7 @@ def test_finetuning_chat_dataset_instantiation_indexed_dataset(tmp_path: Path):
     _ = FinetuningChatDataset.sync_batch_to_model_parallel(topology=None, batch=batch_before_sync)
 
 
+@pytest.mark.transformer
 def test_legacy_text_dataset_instantiation():
     # Delete index if existing
     # We want to make sure that the index can be computed on the fly

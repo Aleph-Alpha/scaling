@@ -36,20 +36,22 @@ Among the featured architecture options we support:
 
 The installation requires Linux with Python 3.10 and PyTorch 2.1.1.
 You will also need the appropriate CUDA dependencies and version installed on your system for GPU support.
-Clone this repository and install:
+Clone this repository and install via [poetry](https://python-poetry.org/docs/):
 
 ```bash
-pip install .
+poetry install
 ```
+
+See also the "Development" section below for additional, optional steps.
 
 ### Flash Attention
 
-To install Flash Attention, you need to make sure you have PyTorch installed already. 
+To install Flash Attention, you need to make sure you have PyTorch installed already.
 Simply install the base depenendencies with `pip install .` before installing Flash Attention.
 Then install Flash Attention with:
 
 ```bash
-pip install .[gpu_optimization]
+poetry run pip install --no-build-isolation flash-attn==2.4.2
 ```
 
 Ensure that your environment variables are set correctly.
@@ -113,6 +115,12 @@ At the end of the day, our transformer training suite ```scaling.transformer``` 
 The MLP example is the best way to start if you want to learn about how to use the building blocks from ```scaling.core``` without getting lost in the details of a complex model architecture.
 
 # Development
+
+Please install pre-commit hooks:
+
+```bash
+pre-commit install
+```
 
 Additional dependencies are required if you want to run tests or type checks.
 Install them as follows:

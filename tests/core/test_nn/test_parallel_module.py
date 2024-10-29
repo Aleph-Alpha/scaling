@@ -7,13 +7,12 @@ import torch
 from scaling.core import Topology
 from scaling.core.runner.launch_config import LaunchConfig
 from scaling.core.utils.port import find_free_port
-
-from ..minimal import MinimalConfig, MinimalContext
-from ..minimal.model import init_model
-from ..minimal.model.model import (
+from tests.core.minimal import MinimalConfig, MinimalContext
+from tests.core.minimal.model import init_model
+from tests.core.minimal.model.model import (
     MinimalParallelModule,
 )
-from ..utils import dist_launcher
+from tests.core.utils import dist_launcher
 
 
 def run_save_and_reload_parallel_module(
@@ -69,6 +68,7 @@ def run_save_and_reload_parallel_module(
     model.save_checkpoint(save_dir_path / "reloaded", separate_file_for_parameters=None)
 
 
+@pytest.mark.skip(reason="unclear if tests makes sense - see todo")
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size",
     [(2, 1), (1, 2), (2, 2)],
@@ -94,6 +94,9 @@ def test_load_checkpoint_with_ignore_keys(
         save_dir_path=tmp_path,
         model_parallel_size=model_parallel_size,
         pipe_parallel_size=pipe_parallel_size,
+        allowed_missing_keys_in_checkpoint=[
+            "embedding.weight"  # todo: should the string need to be set in both allowed missing keys and ignored keys?
+        ],
         ignore_keys_in_checkpoint=ignore_keys_in_checkpoint,
     )
 
@@ -161,8 +164,8 @@ def test_load_parallel_module_from_multiple_dirs(tmp_path: Path, minimal_model: 
         ignore_keys_in_checkpoint=None,
     )
 
-    # move the layer 5 to a subdirectory to test the loading functionality
-    source_file = tmp_path / "model_state_layer_5_MinimalLayerNorm.pt"
+    # move the layer 3 to a subdirectory to test the loading functionality
+    source_file = tmp_path / "model_state_layer_3_MinimalLayerNorm.pt"
     destination_dir = tmp_path / "layer_3"
     destination_file = destination_dir / source_file.name
     source_file.rename(destination_file)

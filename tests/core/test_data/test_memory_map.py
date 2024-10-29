@@ -6,6 +6,7 @@ import pytest
 from scaling.core import MemoryMapDataset, MemoryMapDatasetBuilder
 
 
+@pytest.mark.short
 def test_memory_map(tmp_path: Path):
     """
     tests the creation and read of a memory map dataset

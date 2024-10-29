@@ -6,10 +6,9 @@ import torch
 
 from scaling.core import BaseLayerIO, LayerSpec, TiedLayerSpec, Topology
 from scaling.core.nn.parallel_module.inference_module import InferenceModule, RecorderSetting
-
-from ..minimal.context import MinimalConfig
-from ..minimal.data import MinimalBatch
-from ..minimal.model.model import (
+from tests.core.minimal.context import MinimalConfig
+from tests.core.minimal.data import MinimalBatch
+from tests.core.minimal.model.model import (
     MinimalEmbeddingInput,
     MinimalEmbeddingTied,
     MinimalLayerNorm,

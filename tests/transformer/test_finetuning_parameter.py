@@ -5,9 +5,8 @@ from unittest import mock
 import pytest
 import torch
 import torch.distributed as dist
-from pydantic import ValidationError
 
-from scaling.transformer.context.config import TrainingConfig
+from scaling.transformer.context.config import TrainingConfig, TrainingGroupConfig
 from scaling.transformer.model.model import _extract_parameters, _filter_by_param, _find_matching_param
 
 
@@ -15,39 +14,28 @@ from scaling.transformer.model.model import _extract_parameters, _filter_by_para
     "config",
     [
         {},
-        {"finetune": True, "finetunable_parameters": ["a"], "parameters_exclude": ["b"]},
-        {"finetune": True, "finetunable_parameters": ["a"]},
+        {"allow_missing_params_in_optimizer": True},
+        {"allow_missing_params_in_optimizer": True},
     ],
     ids=["Nothing is set", "Finetune is set and parameter", "Finetune is set and parameter 2"],
 )
-def test_config_raises_not(config):
+def test_config_training_config(config):
     TrainingConfig(**config)
     TrainingConfig.from_dict(config)
-
-
-def test_create_config_with_legacy_field_names():
-    config = TrainingConfig(use_seperate_lr_on_embeddings=True)
-    assert config.use_separate_lr_on_embeddings is True
 
 
 @pytest.mark.parametrize(
     "config",
     [
-        {"finetunable_parameters": ["a"]},
-        {"finetune": True},
-        {"finetunable_parameters": ["a"], "parameters_exclude": ["b"]},
+        {"group_name": "test_group"},
+        {"group_name": "test_group", "parameters_include": ["a"], "parameters_exclude": ["b"]},
+        {"group_name": "test_group", "parameters_include": ["a"]},
     ],
-    ids=[
-        "Finetune is not set but parameter",
-        "Finetune is set but parameter is not",
-        "Finetune is not set but parameter 2",
-    ],
+    ids=["Nothing is set", "Finetune is set and parameter", "Finetune is set and parameter 2"],
 )
-def test_config_raises_error(config: dict):
-    with pytest.raises(ValidationError):
-        TrainingConfig(**config)
-    with pytest.raises(ValidationError):
-        TrainingConfig.from_dict(config)
+def test_config_group_config(config):
+    TrainingGroupConfig(**config)
+    TrainingGroupConfig.from_dict(config)
 
 
 def init_process(rank, size, fn, backend="gloo"):
@@ -78,10 +66,16 @@ def start_x_times(fn, size):
 
 
 def test_not_matching():
-    conf = TrainingConfig(
-        finetune=True,
-        finetunable_parameters=["summarization", "image_encoder"],
+    train_conf = TrainingConfig(
+        allow_missing_params_in_optimizer=True,
     )
+
+    train_group = [
+        TrainingGroupConfig(
+            group_name="test_group",
+            parameters_include=["summarization", "image_encoder"],
+        )
+    ]
 
     input_params = [
         [
@@ -98,7 +92,7 @@ def test_not_matching():
 
     def extract_parameters_of_rank(rank):
         try:
-            _extract_parameters(conf, input_params[rank])
+            _extract_parameters(train_group, input_params[rank], train_conf.allow_missing_params_in_optimizer)
         except Exception as e:
             exception_queue.put((e, rank))
 
@@ -110,10 +104,16 @@ def test_not_matching():
 
 
 def test_matching():
-    conf = TrainingConfig(
-        finetune=True,
-        finetunable_parameters=["summarization", "image_encoder"],
+    train_conf = TrainingConfig(
+        allow_missing_params_in_optimizer=True,
     )
+
+    train_group = [
+        TrainingGroupConfig(
+            group_name="test_group",
+            parameters_include=["summarization", "image_encoder"],
+        )
+    ]
 
     input_params = [
         [
@@ -129,29 +129,32 @@ def test_matching():
     result_queue = SimpleQueue()
 
     def extract_parameters_of_rank(rank):
-        e1, e2, e3 = _extract_parameters(conf, input_params[rank])
-        e1 = [x[0] for x in e1]
-        e2 = [x[0] for x in e2]
-        e3 = [x[0] for x in e3]
-        result_queue.put((rank, e1, e2, e3))
+        e = _extract_parameters(train_group, input_params[rank], train_conf.allow_missing_params_in_optimizer)
+        e = [[y[0] for y in x[0]] for x in e]
+        result_queue.put((rank, e[0]))
 
     start_x_times(extract_parameters_of_rank, 2)
     assert not result_queue.empty()
     while not result_queue.empty():
-        rank, embedding_weight_decay, param_no_weight_decay, param_weight_decay = result_queue.get()
+        rank, param_weight_decay = result_queue.get()
         if rank == 0:
             assert param_weight_decay == ["image_encoder.bar"]
         else:
             assert param_weight_decay == ["foo.summarization.bar"]
-        assert embedding_weight_decay == param_no_weight_decay == []
 
 
 def test_matching_with_exclusion():
-    conf = TrainingConfig(
-        finetune=True,
-        finetunable_parameters=["summarization", "image_encoder"],
-        parameters_exclude=["image_encoder.baz"],
+    train_conf = TrainingConfig(
+        allow_missing_params_in_optimizer=True,
     )
+
+    train_group = [
+        TrainingGroupConfig(
+            group_name="test_group",
+            parameters_include=["summarization", "image_encoder"],
+            parameters_exclude=["image_encoder.baz"],
+        )
+    ]
 
     input_params = [
         [
@@ -168,21 +171,18 @@ def test_matching_with_exclusion():
     result_queue = SimpleQueue()
 
     def extract_parameters_of_rank(rank):
-        e1, e2, e3 = _extract_parameters(conf, input_params[rank])
-        e1 = [x[0] for x in e1]
-        e2 = [x[0] for x in e2]
-        e3 = [x[0] for x in e3]
-        result_queue.put((rank, e1, e2, e3))
+        e = _extract_parameters(train_group, input_params[rank], train_conf.allow_missing_params_in_optimizer)
+        e = [[y[0] for y in x[0]] for x in e]
+        result_queue.put((rank, e[0]))
 
     start_x_times(extract_parameters_of_rank, 2)
     assert not result_queue.empty()
     while not result_queue.empty():
-        rank, embedding_weight_decay, param_no_weight_decay, param_weight_decay = result_queue.get()
+        rank, param_weight_decay = result_queue.get()
         if rank == 0:
             assert param_weight_decay == ["image_encoder.bar"]
         else:
             assert param_weight_decay == ["foo.summarization.bar"]
-        assert embedding_weight_decay == param_no_weight_decay == []
 
 
 @pytest.mark.parametrize(

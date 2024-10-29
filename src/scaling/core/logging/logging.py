@@ -6,13 +6,15 @@ import socket
 from typing import Any, Optional
 
 import wandb
+import wandb.errors
 from torch.utils.tensorboard import SummaryWriter
 
-from .color_formatter import ColorFormatter
+from scaling.core.logging.color_formatter import ColorFormatter
 
 try:
     from determined.core._context import Context as DeterminedContext  # type: ignore
     from determined.profiler import ProfilerAgent as DeterminedProfilerAgent  # type: ignore
+    from determined.tensorboard.metric_writers.pytorch import TorchWriter  # type: ignore
 except ImportError:
     print("WARNING: determined not installed, skipping")
     DeterminedContext = None  # type: ignore
@@ -20,8 +22,8 @@ except ImportError:
 
 import torch
 
-from ..config import BaseConfig
-from .logger_config import LoggerConfig, LogLevel
+from scaling.core.config import BaseConfig
+from scaling.core.logging.logger_config import LoggerConfig, LogLevel, check_if_in_rank
 
 
 def init_wandb(config: LoggerConfig, global_rank: Optional[int]) -> bool:
@@ -39,7 +41,7 @@ def init_wandb(config: LoggerConfig, global_rank: Optional[int]) -> bool:
             entity=config.wandb_team,
         )
         return True
-    except wandb.UsageError:
+    except wandb.errors.UsageError:
         return False
 
 
@@ -50,7 +52,9 @@ class Logger:
         name: Optional[str] = None,
         global_rank: Optional[int] = None,
     ) -> None:
-        self._tensorboard_writer = None
+        self.global_rank = global_rank
+
+        self._tensorboard_writer: Optional[SummaryWriter] = None
         self._use_wandb = False
         self._logger = logging.getLogger(name="aleph-alpha-scaling")
         self._handler = logging.StreamHandler()
@@ -63,10 +67,6 @@ class Logger:
             self._file_handler = logging.FileHandler(filename=str(config.log_dir.absolute() / f"log_{name}.log"))
             self._logger.addHandler(self._file_handler)
 
-            # configure tensorboard
-            if config.use_tensorboard and config.is_rank_in_tensorboard_ranks(global_rank):
-                self._tensorboard_writer = SummaryWriter(log_dir=str(config.log_dir / "tensorboard"))
-
         # configure wandb
         if config.use_wandb and config.is_rank_in_wandb_ranks(global_rank):
             self._use_wandb = init_wandb(config=config, global_rank=global_rank)
@@ -74,6 +74,11 @@ class Logger:
         # Write metrics for rank 0 if metrics ranks not set or if rank is included in metrics ranks
         self._write_metrics = config.is_rank_in_metrics_ranks(global_rank)
         self.set_formatter(name=name)
+
+    def initialize_tensorboard_writer(self, config: LoggerConfig, tensorboard_ranks: Optional[list[int]]) -> None:
+        if config.use_tensorboard and check_if_in_rank(self.global_rank, tensorboard_ranks):
+            assert config.log_dir is not None, "specifying log_dir is needed for tensorboard logging"
+            self._tensorboard_writer = SummaryWriter(log_dir=str(config.log_dir / "tensorboard"))
 
     def set_level(self, log_level: LogLevel) -> None:
         self._logger.setLevel(log_level.name)
@@ -88,14 +93,26 @@ class Logger:
         if self._file_handler is not None:
             self._file_handler.setFormatter(formatter)
 
-    def log_metrics(self, metrics: dict[str, Any], step: int) -> None:
-        if self._write_metrics:
+    def log_metrics(
+        self,
+        metrics: dict[str, Any],
+        step: int,
+        to_info: bool = True,
+        to_tensorboard: bool = True,
+        to_wandb: bool = True,
+    ) -> None:
+        """
+        :param to_info: if True, log to console if rank is in metrics rank
+        :param to_tensorboard: if True, log to tensorboard if there is a _tensorboard_writer
+        :param to_wandb: if True, log to WandB if self._use_wandb
+        """
+        if self._write_metrics and to_info:
             self.info(json.dumps(metrics))
 
-        if self._use_wandb:
+        if self._use_wandb and to_wandb:
             wandb.log(metrics, step=step)
 
-        if self._tensorboard_writer is not None:
+        if self._tensorboard_writer is not None and to_tensorboard:
             for k, v in metrics.items():
                 self._tensorboard_writer.add_scalar(k, v, step)
             self._tensorboard_writer.flush()
@@ -106,7 +123,9 @@ class Logger:
 
     def log_config_dict(self, config_dict: dict) -> None:
         if self._use_wandb:
-            wandb.config.update(config_dict, allow_val_change=True)
+            # MyPy can't get proper type information for config because of how
+            # wandb initializes config
+            wandb.config.update(d=config_dict, allow_val_change=True)  # type: ignore
 
         if self._tensorboard_writer is not None:
             for name, value in config_dict.items():
@@ -140,22 +159,36 @@ class DeterminedLogger(Logger):
         self.determined_profiler = None
         self._use_determined_metrics = False
         self.determined_context = determined_context
-        if config.use_tensorboard and config.is_rank_in_tensorboard_ranks(global_rank):
-            from determined.tensorboard.metric_writers.pytorch import TorchWriter  # type: ignore
-
-            wrapped_writer = TorchWriter()
-            self._tensorboard_writer = wrapped_writer.writer
+        self.use_tensorboard = config.use_tensorboard
 
         # configure determined metrics
         self._use_determined_metrics = config.is_rank_in_determined_metrics_ranks(global_rank)
         if self._use_determined_metrics:
             assert self.determined_context is not None, "Determined Context is needed when metrics should be logged"
 
-    def log_metrics(self, metrics: dict[str, Any], step: int) -> None:
+    def initialize_tensorboard_writer(self, config: LoggerConfig, tensorboard_ranks: Optional[list[int]]) -> None:
+        if config.use_tensorboard and check_if_in_rank(self.global_rank, tensorboard_ranks):
+            wrapped_writer = TorchWriter()
+            self._tensorboard_writer = wrapped_writer.writer
+
+    def log_metrics(
+        self,
+        metrics: dict[str, Any],
+        step: int,
+        to_info: bool = True,
+        to_tensorboard: bool = True,
+        to_wandb: bool = True,
+    ) -> None:
+        """
+        :param to_info: if True, log to console if rank is in metrics rank
+        :param to_tensorboard: if True, log to tensorboard if there is a _tensorboard_writer
+        :param to_wandb: if True, log to WandB if self._use_wandb
+        """
+
         # report training metrics to determined
         if self._use_determined_metrics:
             self._log_determined_metrics(metrics, step)
-        super().log_metrics(metrics, step)
+        super().log_metrics(metrics, step, to_info=to_info, to_tensorboard=to_tensorboard, to_wandb=to_wandb)
 
     def _log_determined_metrics(self, metrics: dict[str, Any], step: int) -> None:
         determined_metrics = {k: (v.item() if isinstance(v, torch.Tensor) else v) for k, v in metrics.items()}
@@ -183,8 +216,10 @@ class _LoggerSingleton:
         config: LoggerConfig,
         name: Optional[str] = None,
         global_rank: Optional[int] = None,
+        tensorboard_ranks: Optional[list[int]] = None,
     ) -> None:
         self._logger_implementation = Logger(config, name, global_rank)
+        self._logger_implementation.initialize_tensorboard_writer(config, tensorboard_ranks)
 
     def configure_determined(
         self,
@@ -192,8 +227,10 @@ class _LoggerSingleton:
         name: Optional[str] = None,
         global_rank: Optional[int] = None,
         determined_context: Optional[DeterminedContext] = None,
+        tensorboard_ranks: Optional[list[int]] = None,
     ) -> None:
         self._logger_implementation = DeterminedLogger(config, name, global_rank, determined_context)
+        self._logger_implementation.initialize_tensorboard_writer(config, tensorboard_ranks)
 
     def __getattr__(self, name: str) -> Any:
         if self._logger_implementation is None:

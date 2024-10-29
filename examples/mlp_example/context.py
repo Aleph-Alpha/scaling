@@ -1,7 +1,6 @@
+from examples.mlp_example.config import MLPConfig
 from scaling.core import BaseContext
 from scaling.core.topology import Topology
-
-from examples.mlp_example.config import MLPConfig
 
 
 class MLPContext(BaseContext):

@@ -22,6 +22,7 @@ def get_norm(
     dtype: torch.dtype,
     bitfit_bias_name: Optional[str] = None,
     topology: Optional[Topology] = None,
+    umup_on_residual: Optional[bool] = None,
 ) -> Union[LayerNorm, RMSNorm]:
     if norm_type == NormType.LAYERNORM:
         assert layernorm_config is not None
@@ -32,6 +33,7 @@ def get_norm(
             dtype=dtype,
             bitfit_bias_name=bitfit_bias_name,
             topology=topology,
+            umup_on_residual=umup_on_residual,
         )
     elif norm_type == NormType.RMS:
         assert layernorm_config is not None
@@ -41,6 +43,7 @@ def get_norm(
             device=device,
             dtype=dtype,
             topology=topology,
+            umup_on_residual=umup_on_residual,
         )
     else:
         raise NotImplementedError(f"{norm_type} {layernorm_config.optimization_type if layernorm_config else ''}")

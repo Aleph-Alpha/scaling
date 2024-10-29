@@ -1,50 +1,49 @@
-from typing import Any, Callable, Tuple
+from typing import Any, Callable
 
 import torch
 import torch.nn.functional as F
 
-from scaling.core import BaseLayerIO
-from scaling.core import ColumnParallelLinear
-from scaling.core import RowParallelLinear
-from scaling.core import BaseLayer
-from scaling.core import ParallelModule
-from scaling.core import LayerSpec
-from scaling.core import BaseOptimizer
-from scaling.core import Optimizer
-from scaling.core import OptimizerParamGroup
-from scaling.core import OptimizerParamGroupConfig
-
-from scaling.core.topology import Topology
 from examples.mlp_example.context import MLPContext
 from examples.mlp_example.data import MNISTDatasetBatch
+from scaling.core import (
+    BaseLayer,
+    BaseLayerIO,
+    BaseOptimizer,
+    ColumnParallelLinear,
+    LayerSpec,
+    Optimizer,
+    OptimizerParamGroup,
+    OptimizerParamGroupConfig,
+    ParallelModule,
+    RowParallelLinear,
+)
+from scaling.core.topology import Topology
 
 
 class MLPLayerIO(BaseLayerIO):
-
     def __init__(self, activations: torch.Tensor):
         self.activations = activations
 
 
 class MLPBaseLayer(BaseLayer[MLPLayerIO, MLPLayerIO, MLPLayerIO]):
     @staticmethod
-    def input_to_tuple(input: MLPLayerIO) -> Tuple[Any, ...]:
+    def input_to_tuple(input: MLPLayerIO) -> tuple[Any, ...]:
         return (input.activations,)
 
     @staticmethod
-    def tuple_to_input(d: Tuple[Any, ...]) -> MLPLayerIO:
+    def tuple_to_input(d: tuple[Any, ...]) -> MLPLayerIO:
         return MLPLayerIO(activations=d[0])
 
     @staticmethod
-    def output_to_tuple(output: MLPLayerIO) -> Tuple[Any, ...]:
+    def output_to_tuple(output: MLPLayerIO) -> tuple[Any, ...]:
         return (output.activations,)
 
     @staticmethod
-    def tuple_to_last_stage_activation(d: Tuple[Any, ...]) -> MLPLayerIO:
+    def tuple_to_last_stage_activation(d: tuple[Any, ...]) -> MLPLayerIO:
         return MLPLayerIO(activations=d[0])
 
 
 class MLPLinearColumnParallel(MLPBaseLayer):
-
     def __init__(
         self,
         in_features: int,
@@ -75,7 +74,6 @@ class MLPLinearColumnParallel(MLPBaseLayer):
 
 
 class MLPLinearRowParallel(MLPBaseLayer):
-
     def __init__(
         self,
         in_features: int,
@@ -104,19 +102,13 @@ class MLPLinearRowParallel(MLPBaseLayer):
         return MLPLayerIO(activations=activations)
 
 
-def loss_function(
-    output: MLPLayerIO,
-    batch: MNISTDatasetBatch
-) -> tuple[torch.Tensor, dict[str, float]]:
+def loss_function(output: MLPLayerIO, batch: MNISTDatasetBatch) -> tuple[torch.Tensor, dict[str, float]]:
     loss = torch.nn.functional.cross_entropy(output.activations, torch.tensor(batch.targets, dtype=torch.long))
     accuracy = sum(output.activations.argmax(dim=1) == batch.targets) / batch.targets.shape[0]  # type: ignore
-    return loss, { "accuracy": accuracy }
+    return loss, {"accuracy": accuracy}
 
 
-def metrics_aggregation_fn(
-    topology: Topology,
-    metrics: list[dict[str, torch.Tensor]]
-) -> dict[str, torch.Tensor]:
+def metrics_aggregation_fn(topology: Topology, metrics: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     def map_all_reduce_fn(t: torch.Tensor) -> torch.Tensor:
         if topology.config.data_parallel_size > 1:
             torch.distributed.all_reduce(t, group=topology.data_parallel_group)
@@ -131,7 +123,7 @@ def metrics_aggregation_fn(
     return metrics_stack
 
 
-def init_model(context: MLPContext):
+def init_model(context: MLPContext) -> ParallelModule:
     layer_specs = []
     # +2 for input and output layers.
     n_layers = context.config.architecture.n_hidden_layers + 2
@@ -145,7 +137,7 @@ def init_model(context: MLPContext):
         kwargs.update({"in_features": hidden_dim if i != 0 else input_dim})
         kwargs.update({"out_features": hidden_dim if i != n_layers - 1 else output_dim})
         kwargs.update({"parallel_output": False} if i == n_layers - 1 else {})
-        kwargs.update({"act_fn": F.relu} if i != n_layers -1 else {})  # type: ignore
+        kwargs.update({"act_fn": F.relu} if i != n_layers - 1 else {})  # type: ignore
 
         layer_specs.append(
             LayerSpec(
@@ -166,9 +158,7 @@ def init_model(context: MLPContext):
 def init_optimizer(context: MLPContext, model: ParallelModule) -> BaseOptimizer:
     parameter_groups = [
         OptimizerParamGroup(
-            named_parameters_with_meta=[
-                (n, p, m) for n, p, m in model.named_parameters_with_meta()
-            ],
+            named_parameters_with_meta=[(n, p, m) for n, p, m in model.named_parameters_with_meta()],
             config=OptimizerParamGroupConfig(
                 name="weight_decay_params",
                 weight_decay=context.config.training.weight_decay,

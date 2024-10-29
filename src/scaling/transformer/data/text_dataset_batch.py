@@ -16,8 +16,10 @@ from .inference_settings import InferenceSettings
 class TextDatasetBatchBeforeSync(BaseDatasetBatch):
     token_ids: torch.Tensor
 
-    def __init__(self, token_ids: torch.Tensor):
+    def __init__(self, token_ids: torch.Tensor, reset_attention_mask: bool = True, reset_position_ids: bool = True):
         self.token_ids = token_ids
+        self.reset_attention_mask = reset_attention_mask
+        self.reset_position_ids = reset_position_ids
 
     def only_inputs(self) -> "TextDatasetBatchBeforeSync":
         return self
@@ -91,6 +93,8 @@ class TextDatasetBatch(BaseDatasetBatch):
         loss_weights: torch.Tensor | None = None,
         inference_settings: InferenceSettings | None = None,
         embeddings: torch.Tensor | None = None,
+        reset_attention_mask: bool = True,
+        reset_position_ids: bool = True,
     ) -> None:
         self.input_token_ids = input_token_ids
         self.input_images = input_images
@@ -105,7 +109,9 @@ class TextDatasetBatch(BaseDatasetBatch):
 
         if self.input_token_ids is not None:
             if self.cumulative_seq_lengths is None and self.cumulative_seq_lengths_padded is None:
-                self.cumulative_seq_lengths = get_cumulative_seq_lengths(self.input_token_ids)
+                self.cumulative_seq_lengths = get_cumulative_seq_lengths(
+                    self.input_token_ids, reset_attention_mask=reset_attention_mask
+                )
             elif self.cumulative_seq_lengths_padded is not None and self.cumulative_seq_lengths is None:
                 # after syncing to model parallel we only have the padded tensor
                 self.cumulative_seq_lengths = remove_cumulative_seq_lengths_padding(self.cumulative_seq_lengths_padded)
@@ -115,7 +121,9 @@ class TextDatasetBatch(BaseDatasetBatch):
                     self.cumulative_seq_lengths, micro_batch_size * (sequence_length + 1)
                 )
             if self.position_ids is None:
-                self.position_ids = get_position_ids(input_token_ids=self.input_token_ids)
+                self.position_ids = get_position_ids(
+                    input_token_ids=self.input_token_ids, reset_position_ids=reset_position_ids
+                )
             if self.loss_weights is None:
                 self.loss_weights = torch.ones_like(self.input_token_ids, dtype=torch.float).contiguous()
 
@@ -130,6 +138,7 @@ class TextDatasetBatch(BaseDatasetBatch):
             input_image_locations=self.input_image_locations,
             position_ids=self.position_ids,
             cumulative_seq_lengths=self.cumulative_seq_lengths,
+            loss_weights=self.loss_weights,
         )
 
     def only_targets(self) -> "TextDatasetBatch":

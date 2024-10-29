@@ -11,12 +11,13 @@ from scaling.core import (
     Topology,
     get_norm,
 )
-
-from ...context.config import (
+from scaling.core.nn.residual import NormedResidualAdd, NormedResidualSplit
+from scaling.core.nn.umup import UMuParametrization
+from scaling.transformer.context.config import (
     MLPType,
     TransformerArchitectureConfig,
 )
-from .base import TransformerLayerBaseIO, TransformerLayerIO
+from scaling.transformer.model.layers.base import TransformerLayerBaseIO, TransformerLayerIO
 
 
 class ZeroLayer(torch.nn.Module):
@@ -64,7 +65,25 @@ class TransformerLayer(TransformerLayerBaseIO):
             dtype=architecture_config.precision.dtype,
             bitfit_bias_name=bitfit_bias_name,
             topology=self.topology,
+            umup_on_residual=True,
         )
+
+        attn_mult: float | None
+        act_mult: float | None
+        residual_mults: list[float] | None
+
+        if architecture_config.umup.enable:
+            attn_mult = architecture_config.umup.attn_mult
+            act_mult = architecture_config.umup.act_mult
+            residual_mults = UMuParametrization.get_umup_transformer_residual_mults(
+                residual_mult=architecture_config.umup.residual_mult,
+                residual_attn_ratio=architecture_config.umup.residual_attn_ratio,
+                num_layers=architecture_config.num_layers,
+            )
+        else:
+            attn_mult = None
+            act_mult = None
+            residual_mults = None
 
         self.self_attention = ParallelSelfAttention(
             hidden_size=self.architecture_config.hidden_size,
@@ -95,8 +114,21 @@ class TransformerLayer(TransformerLayerBaseIO):
             qkv_in_one=self.architecture_config.attention_qkv_in_one,
             num_kv_heads=self.architecture_config.attention_num_kv_heads,
             use_matmul=self.architecture_config.attention_use_matmul,
+            umup_is_first_layer=False,
+            umup_is_last_layer=False,
+            umup_on_residual=True,
+            umup_mult=attn_mult,
+            fp8_config=self.architecture_config.fp8_config_attention,
+            fp8_config_dense_out=self.architecture_config.fp8_config_attention_dense_out,
         )
         self.dropout_attention = torch.nn.Dropout(self.architecture_config.dropout_after_attention)
+
+        self.attn_residual_split = NormedResidualSplit(
+            umup_residual_mults=residual_mults, umup_residual_layer_index=2 * layer_index, umup_pre_norm=True
+        )
+        self.attn_residual_add = NormedResidualAdd(
+            umup_residual_mults=residual_mults, umup_residual_layer_index=2 * layer_index, umup_pre_norm=True
+        )
 
         # post-attention layernorm
         self.post_attention_layernorm = get_norm(
@@ -107,6 +139,7 @@ class TransformerLayer(TransformerLayerBaseIO):
             dtype=architecture_config.precision.dtype,
             bitfit_bias_name=bitfit_bias_name,
             topology=self.topology,
+            umup_on_residual=True,
         )
 
         # mlp components
@@ -120,6 +153,12 @@ class TransformerLayer(TransformerLayerBaseIO):
                 dtype=self.architecture_config.precision.dtype,
                 bitfit_bias_name=bitfit_bias_name,
                 init_method=init_method,
+                umup_is_first_layer=False,
+                umup_is_last_layer=False,
+                umup_on_residual=True,
+                umup_mult=act_mult,
+                fp8_config=self.architecture_config.fp8_config_mlp,
+                fp8_config_dense_out=self.architecture_config.fp8_config_mlp_dense_out,
             )
         elif architecture_config.mlp_type == MLPType.SWIGLU:
             self.mlp = ParallelSwiGLUMLP(
@@ -130,11 +169,24 @@ class TransformerLayer(TransformerLayerBaseIO):
                 dtype=self.architecture_config.precision.dtype,
                 bitfit_bias_name=bitfit_bias_name,
                 init_method=init_method,
+                umup_is_first_layer=False,
+                umup_is_last_layer=False,
+                umup_on_residual=True,
+                umup_mult=act_mult,
+                fp8_config=self.architecture_config.fp8_config_mlp,
+                fp8_config_dense_out=self.architecture_config.fp8_config_mlp_dense_out,
             )
         else:
             raise NotImplementedError
 
         self.dropout_mlp = torch.nn.Dropout(self.architecture_config.dropout_after_mlp)
+
+        self.mlp_residual_split = NormedResidualSplit(
+            umup_residual_mults=residual_mults, umup_residual_layer_index=2 * layer_index + 1, umup_pre_norm=True
+        )
+        self.mlp_residual_add = NormedResidualAdd(
+            umup_residual_mults=residual_mults, umup_residual_layer_index=2 * layer_index + 1, umup_pre_norm=True
+        )
 
         # adapters
         if self.architecture_config.adapter_config is not None:
@@ -197,9 +249,10 @@ class TransformerLayer(TransformerLayerBaseIO):
         attention_scores_manipulation: torch.Tensor | None = None,
         attentions_score_manipulation_log_additive: Union[bool, list[bool]] = True,
     ) -> torch.Tensor:
-        hidden_state_tmp = self.input_layernorm(hidden_state)
-        hidden_state_tmp = self.self_attention(
-            hidden_state_tmp,
+        hidden_state_residual, hidden_state_skip = self.attn_residual_split(hidden_state)
+        hidden_state_residual = self.input_layernorm(hidden_state_residual)
+        hidden_state_residual = self.self_attention(
+            hidden_state_residual,
             cumulative_seq_lengths=cumulative_seq_lengths,
             attention_scores_manipulation=attention_scores_manipulation,
             attentions_score_manipulation_log_additive=attentions_score_manipulation_log_additive,
@@ -210,10 +263,10 @@ class TransformerLayer(TransformerLayerBaseIO):
         )
         if self.topology is not None:
             with self.topology.model_parallel_constant_rng():
-                hidden_state_tmp = self.dropout_attention(hidden_state_tmp)
+                hidden_state_residual = self.dropout_attention(hidden_state_residual)
         else:
-            hidden_state_tmp = self.dropout_attention(hidden_state_tmp)
-        hidden_state = hidden_state + hidden_state_tmp
+            hidden_state_residual = self.dropout_attention(hidden_state_residual)
+        hidden_state = self.attn_residual_add(hidden_state_residual, hidden_state_skip)
 
         if hasattr(self, "attn_adapter_name"):
             hidden_state = hidden_state + self.apply_adapter(hidden_state, self.attn_adapter_name)
@@ -224,14 +277,15 @@ class TransformerLayer(TransformerLayerBaseIO):
         self,
         hidden_state: torch.Tensor,
     ) -> torch.Tensor:
-        hidden_state_tmp = self.post_attention_layernorm(hidden_state)
-        hidden_state_tmp = self.mlp(x=hidden_state_tmp)
+        hidden_state_residual, hidden_state_skip = self.mlp_residual_split(hidden_state)
+        hidden_state_residual = self.post_attention_layernorm(hidden_state_residual)
+        hidden_state_residual = self.mlp(x=hidden_state_residual)
         if self.topology is not None:
             with self.topology.model_parallel_constant_rng():
-                hidden_state_tmp = self.dropout_mlp(hidden_state_tmp)
+                hidden_state_residual = self.dropout_mlp(hidden_state_residual)
         else:
-            hidden_state_tmp = self.dropout_mlp(hidden_state_tmp)
-        hidden_state = hidden_state + hidden_state_tmp
+            hidden_state_residual = self.dropout_mlp(hidden_state_residual)
+        hidden_state = self.mlp_residual_add(hidden_state_residual, hidden_state_skip)
 
         if hasattr(self, "mlp_adapter_name"):
             hidden_state = hidden_state + self.apply_adapter(hidden_state, self.mlp_adapter_name)

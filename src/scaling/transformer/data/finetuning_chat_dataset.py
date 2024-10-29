@@ -2,7 +2,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Optional
 
 import torch
 from PIL import Image  # type: ignore
@@ -17,14 +17,14 @@ from scaling.transformer.data.utils import get_cumulative_seq_lengths
 from scaling.transformer.model.image_encoder import clip_transform
 from scaling.transformer.tokenizer import Tokenizer
 
-from .finetuning_text_dataset import FinetuningTextDatasetItem
+from .dataset_item import TextImageDatasetItem
 from .text_dataset_batch import TextDatasetBatch
 
 IMAGE_ENCODER_TOKEN_COUNTS = 144  # TODO so far this is constant
 IMAGE_TRANSFORM_FN = clip_transform((384, 384))  # TODO so far this is constant
 
 
-class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBatch, TextDatasetBatch]):
+class FinetuningChatDataset(BaseDataset[TextImageDatasetItem, TextDatasetBatch, TextDatasetBatch]):
     """
     Torch dataset providing tokenized text of always the same sequence length; data is loaded from a memory map.
 
@@ -64,7 +64,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
 
         # shuffling
         self.seed: Optional[int] = None
-        self.data_item_index: Optional[List] = None
+        self.data_item_index: Optional[list] = None
 
         self.load_data()
 
@@ -90,14 +90,11 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
         self.seed = seed
 
     def load_data(self) -> None:
-        has_warned = False
-        eos_token_id: int = self.tokenizer.eos_token_id
-
         for d_json in self.data_jsonl:
-            token_list: List[int] = []
-            loss_mask_list: List[int] = []
-            prompt_images_path: Optional[List[Path]] = None
-            prompt_image_locations: Optional[List[Tuple[int, int]]] = None
+            token_list: list[int] = []
+            loss_mask_list: list[int] = []
+            prompt_images_path: Optional[list[Path]] = None
+            prompt_image_locations: Optional[list[tuple[int, int]]] = None
 
             first_text: bool = True
 
@@ -108,7 +105,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
 
                 if type == "text":
                     if first_text:
-                        token: List[int] = self.tokenizer.encode(content)
+                        token: list[int] = self.tokenizer.encode(content)
                     else:
                         token = self.tokenizer_no_prefix_space.encode(content)
 
@@ -131,22 +128,13 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
                             len(token_list) + IMAGE_ENCODER_TOKEN_COUNTS,
                         )
                     )
-                    token_list.extend([self.tokenizer.eos_token_id] * IMAGE_ENCODER_TOKEN_COUNTS)
+                    token_list.extend([self.tokenizer.padding_token_id] * IMAGE_ENCODER_TOKEN_COUNTS)
 
                 else:
                     raise NotImplementedError(f"Content type {type} is not supported")
 
-            if eos_token_id not in token_list:
-                if not has_warned:
-                    has_warned = True
-                    print(
-                        "WARNING: No EOS Token detected. Other than the 'finetuning_text_dataset', the "
-                        "'finetuning_chat_dataset' does not automatically add an EOS token to your data. "
-                        "You have to add it yourself into your 'data.jsonl'."
-                    )
-
-            input_token_list: List[int] = token_list[:-1]
-            target_token_list: List[int] = token_list[1:]
+            input_token_list: list[int] = token_list[:-1]
+            target_token_list: list[int] = token_list[1:]
             loss_mask_list = loss_mask_list[1:]
 
             self.data.append(
@@ -177,16 +165,16 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
     def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, index: int) -> FinetuningTextDatasetItem:
-        eos_token_id: int = self.tokenizer.eos_token_id
+    def __getitem__(self, index: int) -> TextImageDatasetItem:
+        padding_token_id: int = self.tokenizer.padding_token_id
         data = self.data[index]
 
-        input_token_list: List[int] = data["input_token_list"]
-        target_token_list: List[int] = data["target_token_list"]
-        loss_mask_list: List[int] = data["loss_mask_list"]
-        prompt_images_path: Optional[List[Path]] = data["prompt_images_path"]
-        prompt_image_locations: Optional[List[Tuple[int, int]]] = data["prompt_image_locations"]
-        prompt_images_transformed: Optional[List[torch.Tensor]] = None
+        input_token_list: list[int] = data["input_token_list"]
+        target_token_list: list[int] = data["target_token_list"]
+        loss_mask_list: list[int] = data["loss_mask_list"]
+        prompt_images_path: Optional[list[Path]] = data["prompt_images_path"]
+        prompt_image_locations: Optional[list[tuple[int, int]]] = data["prompt_image_locations"]
+        prompt_images_transformed: Optional[list[torch.Tensor]] = None
 
         if self.softprompt_n_tokens > 0:
             input_token_list = [0] * self.softprompt_n_tokens + input_token_list
@@ -195,7 +183,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
 
             # shift image locations
             if prompt_image_locations is not None:
-                prompt_image_locations_: List[Tuple[int, int]] = list()
+                prompt_image_locations_: list[tuple[int, int]] = list()
                 for start, end in prompt_image_locations:
                     prompt_image_locations_.append(
                         (
@@ -207,8 +195,8 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
 
         padding_size = self.sequence_length - len(input_token_list)
 
-        input_token_list = input_token_list + [eos_token_id] * padding_size
-        target_token_list = target_token_list + [eos_token_id] * padding_size
+        input_token_list = input_token_list + [padding_token_id] * padding_size
+        target_token_list = target_token_list + [padding_token_id] * padding_size
         loss_mask_list = loss_mask_list + [0] * padding_size
 
         input_token_list = input_token_list[: self.sequence_length]
@@ -229,7 +217,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
         cumulative_seq_lengths = torch.tensor([0, self.sequence_length], dtype=torch.int32)
         position_ids = torch.arange(0, self.sequence_length)
 
-        return FinetuningTextDatasetItem(
+        return TextImageDatasetItem(
             input_token_ids=input_token_ids,
             target_token_ids=target_token_ids,
             cumulative_seq_lengths=cumulative_seq_lengths,
@@ -239,7 +227,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
             input_image_locations=prompt_image_locations,
         )
 
-    def collate(self, batch: List[FinetuningTextDatasetItem]) -> TextDatasetBatch:
+    def collate(self, batch: list[TextImageDatasetItem]) -> TextDatasetBatch:
         """
         Used to collate lists of samples into batches
         The default implementation returns a BaseDataBatch NamedTuple with the same attributes as the first element
@@ -306,7 +294,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
             assert batch.target_token_ids is not None
             assert batch.cumulative_seq_lengths_padded is not None
             assert batch.position_ids is not None
-            long_tensors: List[Optional[torch.Tensor]] = [
+            long_tensors: list[Optional[torch.Tensor]] = [
                 batch.input_token_ids,
                 batch.target_token_ids,
                 batch.cumulative_seq_lengths_padded.to(torch.long),
@@ -318,7 +306,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
             else:
                 long_tensors.append(batch.input_image_locations)
 
-            float_tensors: List[Optional[torch.Tensor]] = [batch.loss_weights]
+            float_tensors: list[Optional[torch.Tensor]] = [batch.loss_weights]
             if batch.input_images is None:
                 float_tensors.append(torch.tensor([-1.0], dtype=torch.float))
             else:
@@ -356,7 +344,7 @@ class FinetuningChatDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
 
 class FinetuningChatBlendedDataset(
     BaseBlendedDataset[
-        FinetuningTextDatasetItem,
+        TextImageDatasetItem,
         TextDatasetBatch,
         TextDatasetBatch,
         FinetuningChatDataset,

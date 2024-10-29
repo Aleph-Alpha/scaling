@@ -5,15 +5,19 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
 
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import torch
 
-from ...topology import Topology
-from ..parameter_meta import (
+from scaling.core.nn.linear.utils import all_reduce, all_reduce_scatter_to_sequence_parallel
+from scaling.core.nn.parameter_meta import (
+    UMUP_WEIGHT_TYPE,
     CoreParameterMeta,
+    UMuPParameterMeta,
 )
-from .utils import all_reduce, all_reduce_scatter_to_sequence_parallel
+from scaling.core.nn.scale import scale_bwd, scale_fwd
+from scaling.core.nn.umup import UMuParametrization
+from scaling.core.topology import Topology
 
 
 class VocabParallelEmbedding(torch.nn.Module):
@@ -116,6 +120,49 @@ class VocabParallelEmbedding(torch.nn.Module):
 
             self.weight.register_hook(weight_hook)
 
+        self._use_umup = False
+        self.forward_multiplier: float
+        self.weight_grad_multiplier: float
+
+    def _standard_forward(self, x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.embedding(x, weight)
+
+    def umup_setup(self, effective_batch_size: int, depth: int, **kwargs: Any) -> None:
+        self._use_umup = True
+        if self.topology is not None:
+            model_parallel_size = self.topology.config.model_parallel_size
+        else:
+            model_parallel_size = 1
+
+        assert hasattr(self.weight, "core_parameter_meta")
+        assert isinstance(self.weight.core_parameter_meta, CoreParameterMeta)
+
+        self.weight.core_parameter_meta.umup_meta = UMuPParameterMeta(
+            weight_type=UMUP_WEIGHT_TYPE.INPUT_EMBEDDING, on_residual=False
+        )
+
+        UMuParametrization.apply_umup_to_weight(
+            self.weight,
+            model_parallel_size=model_parallel_size,
+            effective_batch_size=effective_batch_size,
+            depth=depth,
+        )
+
+        self.forward_multiplier = self.weight.core_parameter_meta.umup_meta.forward_multiplier
+        self.weight_grad_multiplier = self.weight.core_parameter_meta.umup_meta.grad_multiplier
+
+    def _umup_forward(self, x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+        # pre-scaling
+        weight = scale_bwd(weight, self.weight_grad_multiplier)
+
+        # embedding forward
+        output = self._standard_forward(x, weight)
+
+        # post-scaling
+        output = scale_fwd(output, self.forward_multiplier)
+
+        return output
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         weight = self.weight
 
@@ -126,10 +173,12 @@ class VocabParallelEmbedding(torch.nn.Module):
             # Mask the input.
             masked_input = x - self.vocab_start_index
             masked_input[input_mask] = 0
-            output_parallel = torch.nn.functional.embedding(
-                masked_input,
-                weight,
-            )
+            if self._use_umup:
+                output_parallel = self._umup_forward(masked_input, weight).clone()
+                # we need to clone here because otherwise this gives an error in the
+                # backward when we modify the output in place
+            else:
+                output_parallel = self._standard_forward(masked_input, weight)
             # Mask the output embedding.
             if self.model_parallel_size > 1:
                 output_parallel[input_mask, :] = 0.0
@@ -139,9 +188,9 @@ class VocabParallelEmbedding(torch.nn.Module):
             else:
                 output = all_reduce(output_parallel, topology=self.topology)
         else:
-            output = torch.nn.functional.embedding(
-                x,
-                weight,
-            )
+            if self._use_umup:
+                output = self._umup_forward(x, weight)
+            else:
+                output = self._standard_forward(x, weight)
 
         return output

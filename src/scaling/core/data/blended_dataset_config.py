@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from pydantic import Field
 
-from ..config import BaseConfig
+from scaling.core.config import BaseConfig
 
 
 class BlendedDatasetConfig(BaseConfig):

@@ -10,7 +10,7 @@ from typing import Any
 import torch
 from torch.distributed.distributed_c10d import ProcessGroup
 
-from ...topology import Topology
+from scaling.core.topology import Topology
 
 # -----------------
 # Helper functions/classes for column and row parallel linear layers.

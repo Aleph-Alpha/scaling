@@ -2,6 +2,8 @@ import os
 
 from .context import TransformerConfig, TransformerContext
 from .data import (
+    EmbeddingBlendedDataset,
+    EmbeddingDataset,
     FinetuningChatBlendedDataset,
     FinetuningChatDataset,
     FinetuningTextBlendedDataset,

@@ -6,8 +6,7 @@ import torch
 from scaling.core import Topology, TopologyConfig, VocabParallelEmbedding
 from scaling.core.runner.launch_config import LaunchConfig
 from scaling.core.utils.port import find_free_port
-
-from ..utils import dist_launcher
+from tests.core.utils import dist_launcher
 
 
 def run_test_parallel_embedding(
@@ -87,6 +86,7 @@ def run_test_parallel_embedding(
         )
 
 
+@pytest.mark.nn_rest
 @pytest.mark.parametrize("model_parallel_size", [1, 2])
 @pytest.mark.parametrize("vocab_size", [1, 8, 17, 32])
 @pytest.mark.parametrize("hidden_state_size", [1, 8, 17, 32])

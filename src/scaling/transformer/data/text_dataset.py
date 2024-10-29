@@ -46,6 +46,8 @@ class TextDataset(BaseDataset[TextDatasetItem, TextDatasetBatchBeforeSync, TextD
         allow_incomplete_sequences_every_n: int = 0,
         use_mmap: bool = True,
         shuffle: bool = True,
+        reset_attention_mask: bool = True,
+        reset_position_ids: bool = True,
     ):
         """
         data_prefix (`Path`)
@@ -56,7 +58,6 @@ class TextDataset(BaseDataset[TextDatasetItem, TextDatasetBatchBeforeSync, TextD
         """
         # remember params
         self.use_mmap = use_mmap
-        self.data_prefix = Path(data_prefix)
         self.sequence_length = sequence_length
         self.legacy_dataset = legacy_dataset
         self.load_mmap_index_to_memory = load_mmap_index_to_memory
@@ -90,7 +91,10 @@ class TextDataset(BaseDataset[TextDatasetItem, TextDatasetBatchBeforeSync, TextD
         self.seed: int | None = None
         self.data_item_index: MemoryMapDataset | FileDataset | None = None
 
-        super().__init__(seed=seed, shuffle=shuffle)
+        self.reset_attention_mask = reset_attention_mask
+        self.reset_position_ids = reset_position_ids
+
+        super().__init__(seed=seed, shuffle=shuffle, data_prefix=data_prefix)
 
     def ident(self) -> str:
         md5_hash = hashlib.md5()
@@ -104,28 +108,6 @@ class TextDataset(BaseDataset[TextDatasetItem, TextDatasetBatchBeforeSync, TextD
             self.compute_data_index(seed=seed)
         else:
             self._set_seed(seed=seed, shuffle=shuffle)
-
-    def get_data_index_cache_filename_stem(self, seed: int) -> str:
-        cache_file = str(self.data_prefix) + f"_index_cache_decoder_dataset_seed_{seed}_seq_len_{self.sequence_length}"
-
-        if self.only_full_sequences:
-            cache_file += (
-                f"_only_full_sequences_allow_incomplete_sequences_every_n_{self.allow_incomplete_sequences_every_n}"
-            )
-
-        return cache_file
-
-    def get_data_index_cache_filename_bin(self, seed: int) -> str:
-        return self.get_data_index_cache_filename_stem(seed) + ".bin"
-
-    def get_data_index_cache_filename_idx(self, seed: int) -> str:
-        return self.get_data_index_cache_filename_stem(seed) + ".idx"
-
-    def get_data_index_cache_filename_done(self, seed: int) -> str:
-        return self.get_data_index_cache_filename_stem(seed) + ".done"
-
-    def get_data_index_cache_filename_meta(self, seed: int) -> str:
-        return self.get_data_index_cache_filename_stem(seed) + ".meta.json"
 
     def compute_data_index(self, seed: int) -> None:
         # skip if same result is to be expected
@@ -219,6 +201,16 @@ class TextDataset(BaseDataset[TextDatasetItem, TextDatasetBatchBeforeSync, TextD
             time.sleep(5)
 
         self.data_item_index = get_indexed_dataset_(cache_file_stem, "mmap", True)  # type: ignore[assignment]
+
+    def get_data_index_cache_filename_stem(self, seed: int) -> str:
+        cache_file = str(self.data_prefix) + f"_index_cache_decoder_dataset_seed_{seed}_seq_len_{self.sequence_length}"
+
+        if self.only_full_sequences:
+            cache_file += (
+                f"_only_full_sequences_allow_incomplete_sequences_every_n_{self.allow_incomplete_sequences_every_n}"
+            )
+
+        return cache_file
 
     def _set_seed(self, seed: int, shuffle: bool = True) -> None:
         """
@@ -396,7 +388,11 @@ class TextDataset(BaseDataset[TextDatasetItem, TextDatasetBatchBeforeSync, TextD
             [batch_item.token_ids for batch_item in batch]
         )  # don't move to cuda, otherwise background data loader processes will not work
 
-        return TextDatasetBatchBeforeSync(token_ids=token_ids)
+        return TextDatasetBatchBeforeSync(
+            token_ids=token_ids,
+            reset_attention_mask=self.reset_attention_mask,
+            reset_position_ids=self.reset_position_ids,
+        )
 
     @staticmethod
     def sync_batch_to_model_parallel(
@@ -411,23 +407,34 @@ class TextDataset(BaseDataset[TextDatasetItem, TextDatasetBatchBeforeSync, TextD
             return TextDatasetBatch(
                 input_token_ids=input_token_ids,
                 target_token_ids=target_token_ids,
+                reset_attention_mask=batch.reset_attention_mask,
+                reset_position_ids=batch.reset_position_ids,
             )
 
         if topology.model_parallel_rank == 0:
             assert batch is not None
-            tensors: list[torch.Tensor | None] = [batch.token_ids]
+            tensors: list[torch.Tensor | None] = [
+                batch.token_ids,
+                torch.tensor([batch.reset_attention_mask], dtype=torch.int64),
+                torch.tensor([batch.reset_position_ids], dtype=torch.int64),
+            ]
+
         else:
             assert batch is None
-            tensors = [None]
+            tensors = [None, None, None]
 
         broadcast_tensors = broadcast_data(tensors=tensors, dtype=torch.long, topology=topology)  # type: ignore
 
         input_token_ids = broadcast_tensors[0][:, :-1]
         target_token_ids = broadcast_tensors[0][:, 1:]
+        reset_attention_mask = bool(broadcast_tensors[1].item())
+        reset_position_ids = bool(broadcast_tensors[2].item())
 
         return TextDatasetBatch(
             input_token_ids=input_token_ids,
             target_token_ids=target_token_ids,
+            reset_attention_mask=reset_attention_mask,
+            reset_position_ids=reset_position_ids,
         )
 
     @staticmethod

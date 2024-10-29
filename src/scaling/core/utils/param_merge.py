@@ -1,7 +1,7 @@
 import torch
 
-from ..nn.parameter_meta import CoreParameterMeta
-from ..topology import Topology
+from scaling.core.nn.parameter_meta import CoreParameterMeta
+from scaling.core.topology import Topology
 
 
 def merge_parameter(
@@ -42,7 +42,7 @@ def merge_parameter(
         # after the first iteration the values would otherwise been changed
         parameter.data.copy_(local_parameter_value)
         torch.distributed.broadcast(
-            parameter,
+            parameter.data,
             topology.get_global_rank(model_parallel_rank=sending_mp_rank),
             group=topology.model_parallel_group,
         )

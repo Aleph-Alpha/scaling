@@ -36,6 +36,7 @@ def get_topology(data_parallel_size: int, micro_batch_size: int, global_rank: in
     )
 
 
+@pytest.mark.short
 @pytest.mark.parametrize("micro_batch_size", [1, 2, 4, 5, 6])
 @pytest.mark.parametrize("data_parallel_size", [1, 2, 3, 4, 5, 6])
 @pytest.mark.parametrize("dataset_size", [10, 17, 20])
@@ -196,6 +197,7 @@ def test_dataloader(
         ), "dataset did not resume correctly with checkpoint after first epoch"
 
 
+@pytest.mark.short
 @pytest.mark.parametrize("micro_batch_size", [1, 2, 4, 6])
 def test_dataloader_with_custom_collate_fn(micro_batch_size):
     """
@@ -257,6 +259,7 @@ def test_dataloader_with_custom_collate_fn(micro_batch_size):
         ), "batched tensor does not have shape of length micro_batch_size"
 
 
+@pytest.mark.short
 @pytest.mark.parametrize("n_datasets", [2, 3])
 def test_dataloader_blended_shuffle(
     tmp_path: Path,

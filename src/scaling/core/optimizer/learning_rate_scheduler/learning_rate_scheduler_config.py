@@ -2,7 +2,7 @@ from enum import Enum
 
 from pydantic import Field
 
-from ...config import BaseConfig
+from scaling.core.config import BaseConfig
 
 
 class LearningRateDecayStyle(Enum):
@@ -39,4 +39,9 @@ class LearningRateSchedulerConfig(BaseConfig):
         description="Number of warmup steps during which the learning rate "
         "is linearly increased to the maximum learning rate. "
         "The actual schedule starts after the warmup steps.",
+    )
+
+    learning_rate_warmup_delay_steps: int = Field(
+        0,
+        description="Number of steps for with the learning rate remains zero, until the actual warmup starts.",
     )

@@ -1,6 +1,31 @@
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Optional, TypedDict
 
 import torch
+
+
+class UMUP_WEIGHT_TYPE(str, Enum):
+    INPUT_WEIGHT = "input_weight"
+    HIDDEN_WEIGHT = "hidden_weight"
+    OUTPUT_WEIGHT = "output_weight"
+    INPUT_EMBEDDING = "embedding"
+    BIAS = "bias"
+    NORM = "norm"
+
+
+@dataclass
+class UMuPParameterMeta:
+    # required fields
+    weight_type: UMUP_WEIGHT_TYPE
+    on_residual: bool
+
+    def __post_init__(self) -> None:
+        # de-facto values for multiplier, init_std and lr. These are calculated by the actual mup
+        self.forward_multiplier: float
+        self.backward_multiplier: float
+        self.grad_multiplier: float
+        self.lr_multiplier: float
 
 
 class ParameterMetaState(TypedDict):
@@ -12,6 +37,8 @@ class ParameterMetaState(TypedDict):
     is_tied: bool
     tied_layer_indices: set[int]
     tied_grad_on_model_parallel: bool
+    lr_gain: float
+    umup_meta: Optional[UMuPParameterMeta]
 
 
 class CoreParameterMeta:
@@ -26,6 +53,8 @@ class CoreParameterMeta:
         is_tied: bool = False,
         tied_layer_indices: Optional[set[int]] = None,
         tied_grad_on_model_parallel: bool = False,
+        lr_gain: float = 1.0,
+        umup_meta: Optional[UMuPParameterMeta] = None,
     ):
         self.local_shape = local_shape
         self.is_model_parallel = is_model_parallel
@@ -39,6 +68,18 @@ class CoreParameterMeta:
             self.set_layer_index(layer_index=layer_index)
 
         self.tied_grad_on_model_parallel = tied_grad_on_model_parallel
+        self._lr_gain = lr_gain
+        self.umup_meta = umup_meta
+
+    @property
+    def lr_gain(self) -> float:
+        return self._lr_gain
+
+    def scale_lr_gain(self, factor: float) -> None:
+        """because several codepaths (like umup) might modify the lr gain of a parameter,
+        it is safer to never set this value explicitly, but rather multiply on top of it.
+        """
+        self._lr_gain *= factor
 
     def __repr__(self) -> str:
         return (
@@ -80,6 +121,8 @@ class CoreParameterMeta:
             "is_tied": self.is_tied,
             "tied_layer_indices": self.tied_layer_indices,
             "tied_grad_on_model_parallel": self.tied_grad_on_model_parallel,
+            "lr_gain": self.lr_gain,
+            "umup_meta": self.umup_meta,
         }
 
     @classmethod

@@ -25,6 +25,7 @@ def create_data_prefix(name):
 
 
 # pytest tests/test_data/test_blended_dataset.py::test_blended_dataset_multiple -s
+@pytest.mark.transformer
 @pytest.mark.cpu
 def test_blended_dataset_multiple():
     if os.path.exists("tests/transformer/files/generated"):

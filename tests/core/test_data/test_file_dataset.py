@@ -1,11 +1,13 @@
 from unittest import mock
 
 import numpy as np
+import pytest
 
 from scaling.core.data.file_dataset import retry_array_from_file
 from scaling.core.data.file_handles import FileHandle
 
 
+@pytest.mark.short
 def test_retry_array_from_file():
     max_attempts = 5
     test_array = [1, 2]

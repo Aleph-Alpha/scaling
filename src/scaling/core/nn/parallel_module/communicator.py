@@ -1,3 +1,62 @@
+# Copyright (c) 2024, IPAI Aleph Alpha Research GmbH
+# Open Aleph License 1.0
+#
+# This file also contains code from Facebook, Deepmind Technologies,
+# NYU, NEC Laboratories America and IDIAP Research Institute
+#
+# From PyTorch:
+#
+#     Copyright (c) 2016-     Facebook, Inc            (Adam Paszke)
+#     Copyright (c) 2014-     Facebook, Inc            (Soumith Chintala)
+#     Copyright (c) 2011-2014 Idiap Research Institute (Ronan Collobert)
+#     Copyright (c) 2012-2014 Deepmind Technologies    (Koray Kavukcuoglu)
+#     Copyright (c) 2011-2012 NEC Laboratories America (Koray Kavukcuoglu)
+#     Copyright (c) 2011-2013 NYU                      (Clement Farabet)
+#     Copyright (c) 2006-2010 NEC Laboratories America (Ronan Collobert, Leon Bottou, Iain Melvin, Jason Weston)
+#     Copyright (c) 2006      Idiap Research Institute (Samy Bengio)
+#     Copyright (c) 2001-2004 Idiap Research Institute (Ronan Collobert, Samy Bengio, Johnny Mariethoz)
+#
+#     From Caffe2:
+#
+#     Copyright (c) 2016-present, Facebook Inc. All rights reserved.
+#
+#     All contributions by Facebook:
+#     Copyright (c) 2016 Facebook Inc.
+#
+#     All contributions by Google:
+#     Copyright (c) 2015 Google Inc.
+#     All rights reserved.
+#
+#     All contributions by Yangqing Jia:
+#     Copyright (c) 2015 Yangqing Jia
+#     All rights reserved.
+#
+#     All contributions by Kakao Brain:
+#     Copyright 2019-2020 Kakao Brain
+#
+#     All contributions by Cruise LLC:
+#     Copyright (c) 2022 Cruise LLC.
+#     All rights reserved.
+#
+#     All contributions from Caffe:
+#     Copyright(c) 2013, 2014, 2015, the respective contributors
+#     All rights reserved.
+#
+#     All other contributions:
+#     Copyright(c) 2015, 2016 the respective contributors
+#     All rights reserved.
+#
+#     Caffe2 uses a copyright model similar to Caffe: each contributor holds
+#     copyright over their contributions to Caffe2. The project versioning records
+#     all such contribution and copyright details. If a contributor wants to further
+#     mark their specific copyright on a particular contribution, they should
+#     indicate their copyright solely in the commit message of the change when it is
+#     committed.
+#
+#     All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+
+
 import pickle
 from collections import namedtuple
 from ctypes import c_uint64
@@ -48,6 +107,14 @@ class CommunicationMetaBase:
 
         return True
 
+    def recv_tensor(self, local_device: torch.device) -> torch.Tensor:
+        return torch.zeros(self.tensor_shape, dtype=self.tensor_dtype, device=local_device)  # type: ignore
+
+    def recv_tensor_optional(self, local_device: torch.device) -> torch.Tensor | None:
+        if not self.requires_grad:
+            return None
+        return self.recv_tensor(local_device)
+
 
 def _dump_to_pickle_tensor(x: Any) -> tuple[torch.Tensor, int]:
     dump: list[int] = list(pickle.dumps(x))
@@ -63,14 +130,9 @@ def dump_to_pickle_tensor(x: Any, max_buffer_size: Optional[int] = None) -> torc
     dump_size: int = len(dump)
     dump_size_c: c_uint64 = c_uint64(dump_size)
 
-    if max_buffer_size is None:
-        dump_pad_size = dump_size
-
-    elif (dump_size + 8) <= max_buffer_size:
+    dump_pad_size = dump_size
+    if max_buffer_size is not None and (dump_size + 8) <= max_buffer_size:
         dump_pad_size = max_buffer_size - dump_size - 8
-
-    else:
-        dump_pad_size = dump_size
 
     dump = list(bytes(dump_size_c)) + dump + [0] * dump_pad_size  # type: ignore
     dump_tensor = torch.tensor(dump, dtype=torch.uint8)
@@ -159,6 +221,7 @@ def tree_unflatten_and_drop_nones(values: list, spec: TreeSpec) -> PyTree:
             f"but the spec refers to a pytree that holds {spec.num_leaves} "
             f"items ({spec})."
         )
+
     if isinstance(spec, LeafSpec):
         return values[0]
 
@@ -183,7 +246,7 @@ def tree_unflatten_and_drop_nones(values: list, spec: TreeSpec) -> PyTree:
         child_value = [c_v for c_v in child_value if c_v is not None]
 
         if len(child_value) > 0:
-            child_spec.num_leaves = len(child_value)
+            object.__setattr__(child_spec, "num_leaves", len(child_value))
             context.append(child_context)
             child_pytrees.append(tree_unflatten_and_drop_nones(child_value, child_spec))
 
@@ -230,52 +293,29 @@ class PipeCommunicator:
 
         flatten_data, communication_meta_tree_spec = tree_flatten(data)
 
-        if self.communication_meta_base_flatten is None:
-            max_buffer_size: list[None] | list[int] = [None] * len(flatten_data)
+        max_buffer_sizes: list[None] | list[int]
+        if (
+            self.communication_meta_base_flatten is not None
+            and communication_meta_tree_spec == self.communication_meta_tree_spec
+        ):
+            max_buffer_sizes = [meta.tensor_shape[0] for meta in self.communication_meta_base_flatten]
         else:
-            if communication_meta_tree_spec == self.communication_meta_tree_spec:
-                max_buffer_size = [meta.tensor_shape[0] for meta in self.communication_meta_base_flatten]
-            else:
-                max_buffer_size = [None] * len(flatten_data)
+            max_buffer_sizes = [None] * len(flatten_data)
 
-        meta_and_tensor_map_list = list(
-            zip(
-                *map(
-                    partial(map_to_meta_and_tensor_fn, self.local_device),
-                    flatten_data,
-                    max_buffer_size,
-                )
-            )
+        mapped_communication, mapped_tensor = zip(
+            *(map_to_meta_and_tensor_fn(self.local_device, x, y) for x, y in zip(flatten_data, max_buffer_sizes))
         )
-
-        # TODO: python ZIP has the wrong output type.
-        #  so this is a really hacky overwrite. Find a better way in the future.
-        communication_meta_base_flatten: list[CommunicationMetaBase] = meta_and_tensor_map_list[0]  # type: ignore
-        flatten_tensor: list[torch.Tensor] = meta_and_tensor_map_list[1]  # type: ignore
+        communication_meta_base_flatten: list[CommunicationMetaBase] = list(mapped_communication)
+        flatten_tensor: list[torch.Tensor] = list(mapped_tensor)
 
         if self._use_continuous_recommunication and (
             self.communication_meta_tree_spec is not None and self.communication_meta_base_flatten is not None
         ):
-            is_same = communication_meta_tree_spec == self.communication_meta_tree_spec
-            is_meta_same = list(
-                map(
-                    lambda x, y: x.compare(y),
-                    communication_meta_base_flatten,
-                    self.communication_meta_base_flatten,
-                )
+            is_same = communication_meta_tree_spec == self.communication_meta_tree_spec and all(
+                x.compare(y) for x, y in zip(communication_meta_base_flatten, self.communication_meta_base_flatten)
             )
-            is_same = is_same and (False not in is_meta_same)
-
-            tensor_is_same = torch.tensor(
-                [is_same],
-                device=self.local_device,
-                dtype=torch.bool,  # type: ignore
-            )
-
-            torch.distributed.send(
-                tensor_is_same,
-                target_global_rank,
-            )
+            tensor_is_same = torch.tensor([is_same], device=self.local_device, dtype=torch.bool)  # type: ignore
+            torch.distributed.send(tensor_is_same, target_global_rank)
 
             if is_same:
                 return flatten_tensor, False
@@ -293,28 +333,12 @@ class PipeCommunicator:
 
         tensor_len_tensor = torch.tensor(data=[tensor_len], dtype=torch.long, device=self.local_device)
 
-        torch.distributed.send(
-            tensor_len_tensor,
-            target_global_rank,
-        )
-
-        torch.distributed.send(
-            communication_meta_base_tree_dump,
-            target_global_rank,
-        )
+        torch.distributed.send(tensor_len_tensor, target_global_rank)
+        torch.distributed.send(communication_meta_base_tree_dump, target_global_rank)
 
         if self._recv_grads and self.communication_meta_base_flatten is not None:
             self.gradient_recv_buffer = [
-                (
-                    torch.zeros(
-                        meta.tensor_shape,
-                        dtype=meta.tensor_dtype,
-                        device=self.local_device,  # type: ignore
-                    )
-                    if meta.requires_grad
-                    else None
-                )
-                for meta in self.communication_meta_base_flatten
+                meta.recv_tensor_optional(self.local_device) for meta in self.communication_meta_base_flatten
             ]
 
         return flatten_tensor, True
@@ -328,10 +352,7 @@ class PipeCommunicator:
         if self._use_continuous_recommunication and (
             self.communication_meta_tree_spec is not None and self.communication_meta_base_flatten is not None
         ):
-            torch.distributed.recv(
-                self._recv_meta_data_tensor_is_same,
-                origin_global_rank,
-            )
+            torch.distributed.recv(self._recv_meta_data_tensor_is_same, origin_global_rank)
 
             if self._recv_meta_data_tensor_is_same[0]:
                 return False
@@ -339,41 +360,27 @@ class PipeCommunicator:
         self.communication_meta_tree_spec = None
         self.communication_meta_base_flatten = None
 
-        torch.distributed.recv(
-            self._recv_meta_data_tensor_len,
-            origin_global_rank,
-        )
+        torch.distributed.recv(self._recv_meta_data_tensor_len, origin_global_rank)
 
         communication_meta_base_tree_dump_tensor = torch.zeros(
-            size=list(
-                self._recv_meta_data_tensor_len,
-            ),
+            size=list(self._recv_meta_data_tensor_len),
             dtype=torch.uint8,
-            device=self.local_device,  # type: ignore
-        )
+            device=self.local_device,
+        )  # type: ignore
 
-        torch.distributed.recv(
-            communication_meta_base_tree_dump_tensor,
-            origin_global_rank,
-        )
+        torch.distributed.recv(communication_meta_base_tree_dump_tensor, origin_global_rank)
 
         communication_meta_base_tree_dump: bytes = bytes(communication_meta_base_tree_dump_tensor.tolist())
         communication_meta_base_tree = pickle.loads(communication_meta_base_tree_dump)
 
-        (
-            self.communication_meta_base_flatten,
-            self.communication_meta_tree_spec,
-        ) = tree_flatten(communication_meta_base_tree)
+        (self.communication_meta_base_flatten, self.communication_meta_tree_spec) = tree_flatten(
+            communication_meta_base_tree
+        )
 
         # allocate buffer to receive the data later
         if self._recv_data:
             self.activation_recv_buffer = [
-                torch.zeros(
-                    meta.tensor_shape,
-                    dtype=meta.tensor_dtype,
-                    device=self.local_device,  # type: ignore
-                )
-                for meta in self.communication_meta_base_flatten
+                meta.recv_tensor(self.local_device) for meta in self.communication_meta_base_flatten
             ]
 
         return True
@@ -398,37 +405,25 @@ class PipeCommunicator:
                 target_global_rank,
             )
 
-    def recv_data(
-        self,
-        origin_global_rank: int,
-    ) -> PyTree:
+    def recv_data(self, origin_global_rank: int) -> PyTree:
         self._recv_meta_data(origin_global_rank)
 
         assert self.communication_meta_base_flatten is not None
         assert self.communication_meta_tree_spec is not None
 
-        recvd_flatten = list()
+        recvd_flatten = []
         for tensor, meta in zip(self.activation_recv_buffer, self.communication_meta_base_flatten):
             assert tensor is not None
 
-            torch.distributed.recv(
-                tensor,
-                origin_global_rank,
-            )
+            torch.distributed.recv(tensor, origin_global_rank)
             tensor_own = tensor.clone().detach()
             if meta.requires_grad:
                 tensor_own.requires_grad = True
 
             recvd_flatten.append(tensor_own)
-
-        recvd_flatten = list(
-            map(
-                map_loads_from_pickle_tensor_fn,
-                recvd_flatten,
-                self.communication_meta_base_flatten,
-            )
-        )
-
+        recvd_flatten = [
+            map_loads_from_pickle_tensor_fn(x, y) for x, y in zip(recvd_flatten, self.communication_meta_base_flatten)
+        ]
         recvd = tree_unflatten(recvd_flatten, self.communication_meta_tree_spec)
 
         return recvd
@@ -436,7 +431,7 @@ class PipeCommunicator:
     def send_gradients(self, data: PyTree, target_global_rank: int) -> None:
         assert (
             self.communication_meta_tree_spec is not None
-        ), "communication_meta_activations is None; run send_activation_meta and recv_activation_meta first"
+        ), "communication_meta_tree_spec is None; run send_meta_data and recv_meta_data first"
 
         assert self.communication_meta_base_flatten is not None
 
@@ -455,11 +450,7 @@ class PipeCommunicator:
                 target_global_rank,
             )
 
-    def recv_gradients(
-        self,
-        data: PyTree,
-        origin_global_rank: int,
-    ) -> GradOutput:
+    def recv_gradients(self, data: PyTree, origin_global_rank: int) -> GradOutput:
         assert (
             self.communication_meta_tree_spec is not None
         ), "communication_meta_activations is None; run send_activation_meta and recv_activation_meta first"
@@ -467,16 +458,12 @@ class PipeCommunicator:
         assert self.communication_meta_base_flatten is not None
 
         # receive buffer is always a list
-        out_tensor_flatten: list[Optional[torch.Tensor]] = list()
-        grad_tensor_flatten: list[Optional[torch.Tensor]] = list()
+        out_tensor_flatten: list[Optional[torch.Tensor]] = []
+        grad_tensor_flatten: list[Optional[torch.Tensor]] = []
 
         flatten_data, _ = tree_flatten(data)
 
-        for grad, data, meta in zip(
-            self.gradient_recv_buffer,
-            flatten_data,
-            self.communication_meta_base_flatten,
-        ):
+        for grad, data, meta in zip(self.gradient_recv_buffer, flatten_data, self.communication_meta_base_flatten):
             if not meta.requires_grad:
                 grad_tensor_flatten.append(None)
                 out_tensor_flatten.append(None)
@@ -484,10 +471,7 @@ class PipeCommunicator:
 
             assert isinstance(grad, torch.Tensor)
 
-            torch.distributed.recv(
-                grad,
-                origin_global_rank,
-            )
+            torch.distributed.recv(grad, origin_global_rank)
 
             grad_tensor_flatten.append(grad)
             out_tensor_flatten.append(data)
@@ -495,16 +479,14 @@ class PipeCommunicator:
         out_tree = tree_unflatten_and_drop_nones(out_tensor_flatten, self.communication_meta_tree_spec)
         grad_tree = tree_unflatten_and_drop_nones(grad_tensor_flatten, self.communication_meta_tree_spec)
 
-        # print("grad_tree:", grad_tree)
-
         return GradOutput(tensors=out_tree, grad_tensors=grad_tree)
 
     def reset_communication_meta(self, use_continuous_recommunication: Optional[bool] = None) -> None:
         self.communication_meta_tree_spec = None
         self.communication_meta_base_flatten = None
 
-        self.activation_recv_buffer = list()
-        self.gradient_recv_buffer = list()
+        self.activation_recv_buffer = []
+        self.gradient_recv_buffer = []
 
         if use_continuous_recommunication is not None:
             self._use_continuous_recommunication = use_continuous_recommunication
@@ -518,11 +500,7 @@ class ModelParallelCommunicator:
     - The activations are reconstructed using the meta information
     """
 
-    def __init__(
-        self,
-        topology: Topology,
-        use_continuous_recommunication: bool = False,
-    ):
+    def __init__(self, topology: Topology, use_continuous_recommunication: bool = False):
         self.topology = topology
         self.local_device = self.topology.device
         assert self.local_device is not None
@@ -531,12 +509,12 @@ class ModelParallelCommunicator:
         self.communication_meta_tree_spec: Optional[TreeSpec] = None
         self.communication_meta_base_flatten: Optional[list[CommunicationMetaBase]] = None
 
-        self.activation_recv_buffer: list[Optional[torch.Tensor]] = list()
+        self.activation_recv_buffer: list[Optional[torch.Tensor]] = []
 
         self._recv_meta_data_tensor_is_same = torch.tensor(data=[False], dtype=torch.bool, device=self.local_device)
         self._recv_meta_data_tensor_len = torch.tensor(data=[0], dtype=torch.long, device=self.local_device)
 
-    def _send_meta_data(self, data: PyTree) -> tuple[None, bool] | tuple[list[torch.Tensor], bool]:
+    def _send_meta_data(self, data: PyTree) -> tuple[list[torch.Tensor] | None, bool]:
         if (
             self.communication_meta_tree_spec is not None and self.communication_meta_base_flatten is not None
         ) and not self._use_continuous_recommunication:

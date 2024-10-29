@@ -1,9 +1,12 @@
 from errno import ESTALE
 from unittest import mock
 
+import pytest
+
 from scaling.core.data.file_handles import FileHandle, RetryableException
 
 
+@pytest.mark.short
 def test_retry_on_stale_file_handles():
     """
     tests that retrying on stale file handles works as expected

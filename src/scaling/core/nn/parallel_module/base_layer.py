@@ -3,7 +3,7 @@ from typing import Any, Generic, TypeVar
 
 import torch
 
-from ...data import BaseDatasetBatch, BaseLayerIO
+from scaling.core.data import BaseDatasetBatch, BaseLayerIO
 
 BaseLossInputGeneric = TypeVar("BaseLossInputGeneric")
 BaseLossOutputGeneric = TypeVar("BaseLossOutputGeneric", torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]])

@@ -17,11 +17,10 @@ from scaling.core.nn.parallel_module.communicator import (
 )
 from scaling.core.runner.launch_config import LaunchConfig
 from scaling.core.utils.port import find_free_port
+from tests.core.utils import dist_launcher
 
-from ..utils import dist_launcher
 
-
-class Dummy_Settings:
+class DummySettings:
     def __init__(self, name: str, some_int_list: list):
         self.name = name
         self.some_int_list = some_int_list
@@ -56,7 +55,7 @@ DUMMY_DATA_8 = {
     "b": torch.zeros(size=(1,)),
     "c": {"d": torch.zeros(size=(5, 5)), "e": torch.zeros(size=(115,))},
     "d": [True, "THIS IS A TEXT"],
-    "settings": Dummy_Settings(name="THIS IS A AMAZING NAME", some_int_list=[0, -55, 5, 5, 66]),
+    "settings": DummySettings(name="THIS IS A AMAZING NAME", some_int_list=[0, -55, 5, 5, 66]),
 }
 
 DUMMY_DATA_9 = [
@@ -68,19 +67,7 @@ DUMMY_DATA_9 = [
 
 
 def run_any_communication(return_dict: dict, dummy_data: Any, use_continuous_recommunication: bool):
-    launch_config = LaunchConfig.from_launcher_args()
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(launch_config.global_rank)
-
-    rank = launch_config.global_rank
-    device = torch.device("cuda")
-
-    torch.distributed.init_process_group(
-        backend="nccl",
-        world_size=2,
-        rank=rank,
-        init_method=f"tcp://{launch_config.master_addr}:{launch_config.master_port}",
-        timeout=timedelta(minutes=1),
-    )
+    device, rank = _init_distributed()
 
     if rank == 0:
 
@@ -90,31 +77,15 @@ def run_any_communication(return_dict: dict, dummy_data: Any, use_continuous_rec
             else:
                 return x
 
-        # call tree_map only in test to move to gpu
+        com = _create_pipe_communicator(device, use_continuous_recommunication, False)
         dummy_data = tree_map(map_to_fn, dummy_data)
-
-        com = PipeCommunicator(
-            local_device=device,
-            recv_grads=False,
-            recv_data=False,
-            use_continuous_recommunication=use_continuous_recommunication,
-        )
-
-        com.reset_communication_meta()
 
         com.send_data(data=dummy_data, target_global_rank=1)
         com.send_data(data=dummy_data, target_global_rank=1)
         com.send_data(data=dummy_data, target_global_rank=1)
 
     elif rank == 1:
-        com = PipeCommunicator(
-            local_device=device,
-            recv_grads=False,
-            recv_data=True,
-            use_continuous_recommunication=use_continuous_recommunication,
-        )
-
-        com.reset_communication_meta()
+        com = _create_pipe_communicator(device, use_continuous_recommunication, True)
 
         com.recv_data(origin_global_rank=0)
         com.recv_data(origin_global_rank=0)
@@ -124,25 +95,11 @@ def run_any_communication(return_dict: dict, dummy_data: Any, use_continuous_rec
         raise RuntimeError
 
 
-def create_random_dummy_data():
-    a = torch.rand(size=(5, 3, 3), dtype=torch.float)
-    b = torch.rand(size=(1,), dtype=torch.bfloat16)
-    c = torch.rand(size=(7, 7), dtype=torch.bfloat16)
-
-    d = "".join((random.choice(string.ascii_letters) for i in range(random.randint(12, 16))))
-    _e = [random.choice(list(range(-50, 50))) for i in range(random.randint(12, 16))]
-    e = Dummy_Settings(name=d, some_int_list=_e)
-
-    return [a, (b, c), d, e]
-
-
-def run_const_communication(return_dict: dict):
+def _init_distributed():
     launch_config = LaunchConfig.from_launcher_args()
     os.environ["CUDA_VISIBLE_DEVICES"] = str(launch_config.global_rank)
-
     rank = launch_config.global_rank
     device = torch.device("cuda")
-
     torch.distributed.init_process_group(
         backend="nccl",
         world_size=2,
@@ -150,8 +107,27 @@ def run_const_communication(return_dict: dict):
         init_method=f"tcp://{launch_config.master_addr}:{launch_config.master_port}",
         timeout=timedelta(minutes=1),
     )
+    return device, rank
 
+
+def create_random_dummy_data():
+    a = torch.rand(size=(5, 3, 3), dtype=torch.float)
+    b = torch.rand(size=(1,), dtype=torch.bfloat16)
+    c = torch.rand(size=(7, 7), dtype=torch.bfloat16)
+
+    d = "".join((random.choice(string.ascii_letters) for i in range(random.randint(12, 16))))
+    _e = [random.choice(list(range(-50, 50))) for i in range(random.randint(12, 16))]
+    e = DummySettings(name=d, some_int_list=_e)
+
+    return [a, (b, c), d, e]
+
+
+def run_const_communication(return_dict: dict):
+    device, rank = _init_distributed()
     if rank == 0:
+        dummy_data = create_random_dummy_data()
+
+        com = _create_pipe_communicator(device, True, False)
 
         def map_to_fn(x: Any):
             if torch.is_tensor(x):
@@ -159,16 +135,6 @@ def run_const_communication(return_dict: dict):
             else:
                 return x
 
-        com = PipeCommunicator(
-            local_device=device,
-            recv_grads=False,
-            recv_data=False,
-            use_continuous_recommunication=True,
-        )
-
-        com.reset_communication_meta()
-
-        dummy_data = create_random_dummy_data()
         dummy_data = tree_map(map_to_fn, dummy_data)
 
         _, did_reset = com._send_meta_data(data=dummy_data, target_global_rank=1)
@@ -196,14 +162,7 @@ def run_const_communication(return_dict: dict):
             assert not did_reset, "should not reset, on the second pass"
 
     elif rank == 1:
-        com = PipeCommunicator(
-            local_device=device,
-            recv_grads=False,
-            recv_data=True,
-            use_continuous_recommunication=True,
-        )
-
-        com.reset_communication_meta()
+        com = _create_pipe_communicator(device, True, True)
 
         did_reset = com._recv_meta_data(origin_global_rank=0)
         assert did_reset, "needs to reset on the first pass"
@@ -223,6 +182,18 @@ def run_const_communication(return_dict: dict):
         raise RuntimeError
 
 
+def _create_pipe_communicator(device, use_continuous_recommunication, recv_data):
+    com = PipeCommunicator(
+        local_device=device,
+        recv_grads=False,
+        recv_data=recv_data,
+        use_continuous_recommunication=use_continuous_recommunication,
+    )
+    com.reset_communication_meta()
+    return com
+
+
+@pytest.mark.parallel_module
 @pytest.mark.parametrize(
     "dummy_input",
     [
@@ -248,6 +219,7 @@ def test_any_communication(dummy_input, use_continuous_recommunication):
     )
 
 
+@pytest.mark.parallel_module
 def test_const_communication():
     _ = dist_launcher(
         run_func=run_const_communication,
@@ -256,6 +228,7 @@ def test_const_communication():
     )
 
 
+@pytest.mark.parallel_module
 @pytest.mark.cpu
 def test_pickle():
     dummy_meta = CommunicationMetaBase(is_tensor=False, tensor_dtype=None, tensor_shape=None, requires_grad=None)

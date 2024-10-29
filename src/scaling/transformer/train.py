@@ -12,6 +12,7 @@ from scaling.core import (
     Topology,
 )
 from scaling.core.logging import logger
+from scaling.core.logging.logger_config import TensorboardRanksConfig
 from scaling.core.nn.parallel_module import EvaluationStepOutput, TrainStepOutput
 from scaling.core.runner.launch_config import LaunchConfig
 from scaling.transformer import (
@@ -29,8 +30,10 @@ from scaling.transformer import (
     init_optimizer,
 )
 from scaling.transformer.context.config import DataConfig
+from scaling.transformer.data.embedding_dataset import EmbeddingBlendedDataset, EmbeddingDataset
 from scaling.transformer.dataset_loader import load_datasets
-from scaling.transformer.model.model import loss_function, metrics_aggregation_fn
+from scaling.transformer.model.losses import create_loss_function
+from scaling.transformer.model.model import metrics_aggregation_fn
 from scaling.transformer.utils.get_tflops import (
     get_model_flop_utilization_palm,
     get_tflops_aleph_alpha,
@@ -196,6 +199,8 @@ def main(
     if topology.is_io_rank:
         blended_dataset, validation_blended_dataset = _read_datasets(context.config)
 
+    loss_function = create_loss_function(context, config.training.loss_function_config)
+
     trainer = TransformerTrainer(
         config=context.config.trainer,
         context=context,
@@ -215,6 +220,9 @@ def _get_sync_batch(data_config: DataConfig) -> Callable:
         return FinetuningTextDataset.sync_batch_to_model_parallel
     if data_config.finetuning_chat_dataset:
         return FinetuningChatDataset.sync_batch_to_model_parallel
+    if data_config.embedding_dataset:
+        return EmbeddingDataset.sync_batch_to_model_parallel
+
     return TextDataset.sync_batch_to_model_parallel
 
 
@@ -244,6 +252,9 @@ def _get_dataset_type(data_config: DataConfig) -> type[BaseBlendedDataset]:
         return FinetuningTextBlendedDataset
     if data_config.finetuning_chat_dataset:
         return FinetuningChatBlendedDataset
+    if data_config.embedding_dataset:
+        return EmbeddingBlendedDataset
+
     return TextBlendedDataset
 
 
@@ -273,16 +284,29 @@ def _init_transformer_context(
 
 
 def _init_logger(config: TransformerConfig, determined_context: DeterminedContext | None, topology: Topology) -> None:
+    if isinstance(config.logger.tensorboard_ranks, TensorboardRanksConfig):
+        tensorboard_ranks = topology.get_global_rank_group(
+            data_parallel_rank=config.logger.tensorboard_ranks.data_parallel_rank,
+            model_parallel_rank=config.logger.tensorboard_ranks.model_parallel_rank,
+            pipe_parallel_rank=config.logger.tensorboard_ranks.pipe_parallel_rank,
+        )
+    else:
+        tensorboard_ranks = config.logger.tensorboard_ranks  # type: ignore
+
     if config.runner.use_determined:
         logger.configure_determined(
             config=config.logger,
             name=f"RANK {topology.config.global_rank}",
             global_rank=topology.config.global_rank,
             determined_context=determined_context,
+            tensorboard_ranks=tensorboard_ranks,
         )
     else:
         logger.configure(
-            config=config.logger, name=f"RANK {topology.config.global_rank}", global_rank=topology.config.global_rank
+            config=config.logger,
+            name=f"RANK {topology.config.global_rank}",
+            global_rank=topology.config.global_rank,
+            tensorboard_ranks=tensorboard_ranks,
         )
     logger.log_config(config=config)
 

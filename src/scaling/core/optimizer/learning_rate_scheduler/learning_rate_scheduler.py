@@ -19,9 +19,22 @@ class LearningRateScheduler:
         """
         Compute the learning rate for a given step index.
         """
+
+        if (
+            self.config.learning_rate_warmup_delay_steps > 0
+            and step_index <= self.config.learning_rate_warmup_delay_steps
+        ):
+            return 0.0
+
         # Use linear warmup for the initial part.
-        if self.config.learning_rate_warmup_steps > 0 and step_index <= self.config.learning_rate_warmup_steps:
-            return self.config.learning_rate * float(step_index) / float(self.config.learning_rate_warmup_steps)
+        if self.config.learning_rate_warmup_steps > 0 and step_index <= (
+            self.config.learning_rate_warmup_steps + self.config.learning_rate_warmup_delay_steps
+        ):
+            return (
+                self.config.learning_rate
+                * float(step_index - self.config.learning_rate_warmup_delay_steps)
+                / float(self.config.learning_rate_warmup_steps)
+            )
 
         # If constant learning rate return the max after warmup
         if self.config.learning_rate_decay_style == LearningRateDecayStyle.CONSTANT:
@@ -34,8 +47,14 @@ class LearningRateScheduler:
         # Use decay styles after warmup
         # Note that to get here:
         #   self.config.learning_rate_warmup_steps < step_index <= self.config.learning_rate_decay_iters
-        num_steps_no_warmup = step_index - self.config.learning_rate_warmup_steps
-        decay_steps_no_warmup = self.config.learning_rate_decay_iters - self.config.learning_rate_warmup_steps
+        num_steps_no_warmup = (
+            step_index - self.config.learning_rate_warmup_steps - self.config.learning_rate_warmup_delay_steps
+        )
+        decay_steps_no_warmup = (
+            self.config.learning_rate_decay_iters
+            - self.config.learning_rate_warmup_steps
+            - self.config.learning_rate_warmup_delay_steps
+        )
         decay_ratio = float(num_steps_no_warmup) / float(decay_steps_no_warmup)
 
         assert 0.0 <= decay_ratio <= 1.0

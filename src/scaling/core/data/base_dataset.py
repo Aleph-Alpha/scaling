@@ -1,10 +1,11 @@
 from abc import abstractmethod
+from pathlib import Path
 from typing import Generic, Optional, TypeVar
 
 import torch
 
-from ..topology import Topology
-from .base_layer_io import BaseLayerIO
+from scaling.core.data.base_layer_io import BaseLayerIO
+from scaling.core.topology import Topology
 
 TBaseDatasetBatch = TypeVar("TBaseDatasetBatch", bound="BaseDatasetBatch")
 
@@ -55,22 +56,49 @@ class BaseDataset(
     Returns a BaseDatasetItem for each index.
     """
 
-    def __init__(self, seed: int, shuffle: bool = True) -> None:
+    def __init__(
+        self,
+        seed: int,
+        data_prefix: Path = Path(""),
+        data_index_prefix: Path | None = None,
+        shuffle: bool = True,
+    ) -> None:
         """
         seed (`int`)
             seed used to shuffle the dataset
 
-        config (`Optional[BaseConfig]`)
-            dataset config which need to be implemented in child classes
+        data_prefix (`str`)
+            prefix of the data files
+
+        shuffle (`bool`)
+            whether to shuffle the dataset
         """
         # shuffling
         self.seed: Optional[int] = None
+        self.data_prefix = data_prefix
+        self.data_index_prefix = data_index_prefix if data_index_prefix is not None else data_prefix
         self.set_seed(seed=seed, shuffle=shuffle)
 
     @abstractmethod
     def ident(self) -> str:
         # implement in child class
         raise NotImplementedError
+
+    def get_data_index_cache_filename_stem(self, seed: int) -> str:
+        cache_file = str(self.data_index_prefix) + f"_index_cache_decoder_dataset_seed_{seed}"
+        return cache_file
+
+    def get_data_index_cache_filename_bin(self, seed: int) -> str:
+        return self.get_data_index_cache_filename_stem(seed) + ".bin"
+
+    def get_data_index_cache_filename_idx(self, seed: int) -> str:
+        return self.get_data_index_cache_filename_stem(seed) + ".idx"
+
+    def get_data_index_cache_filename_done(self, seed: int) -> str:
+        return self.get_data_index_cache_filename_stem(seed) + ".done"
+
+    def get_data_index_cache_filename_meta(self, seed: int) -> str:
+        return self.get_data_index_cache_filename_stem(seed) + ".meta.json"
 
     @abstractmethod
     def __len__(self) -> int:

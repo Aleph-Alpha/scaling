@@ -10,9 +10,6 @@ __pycache__/
 *.jpg
 *.png
 
-# Determined
-.detignore
-
 # Distribution / packaging
 .Python
 build/
@@ -151,8 +148,7 @@ Todo.json
 cython_debug/
 
 # Temporary test files
-tests/luminous/files/
-tests/aleph_alpha_scaling/files/
+tests/.tmp/
 debug_logs/
 envs/
 .data/

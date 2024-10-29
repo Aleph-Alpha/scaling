@@ -3,12 +3,14 @@ from typing import Any, Generator, List, Optional, Sequence, Tuple
 import torch
 
 from scaling.core.logging import logger
-
-from ..nn.parameter_meta import CoreParameterMeta, ParameterMetaState
-from ..topology import Topology
-from .base import BaseOptimizerState
-from .learning_rate_scheduler import LearningRateScheduler
-from .parameter_group_config import OptimizerParamGroupConfig
+from scaling.core.nn.parameter_meta import CoreParameterMeta, ParameterMetaState
+from scaling.core.optimizer.base import BaseOptimizerState
+from scaling.core.optimizer.learning_rate_scheduler import LearningRateScheduler
+from scaling.core.optimizer.learning_rate_scheduler.learning_rate_scheduler_config import (
+    LearningRateSchedulerConfig,
+)
+from scaling.core.optimizer.parameter_group_config import OptimizerParamGroupConfig
+from scaling.core.topology import Topology
 
 # align nccl all-gather send buffers to 4-byte boundary
 # 4-byte alignment/sizeof(fp16) = 2
@@ -226,9 +228,12 @@ class OptimizerParamGroup:
 
         # create a parameter dict that is suitable for the torch optimizer
         # this dict will be handed to the torch optimizer and can be manipulated
+        weight_decay = self.config.weight_decay
+        if self.config.independent_weight_decay:
+            weight_decay /= self.config.learning_rate_scheduler.learning_rate
         self.parameter_dict = {
             "params": self.parameters_optimized,
-            "weight_decay": self.config.weight_decay,
+            "weight_decay": weight_decay,
             "lr": self.config.learning_rate_scheduler.learning_rate,
         }
 
@@ -665,3 +670,60 @@ class OptimizerParamGroup:
     @property
     def parameters_for_overflow_check(self) -> List[torch.Tensor]:
         return self.parameters_original
+
+
+def get_new_optimizer_groups_by_lr_gain_per_param(
+    parameter_groups: List[OptimizerParamGroup], topology: Topology
+) -> List[OptimizerParamGroup]:
+    new_parameter_groups = list()
+    for parameter_group in parameter_groups:
+        lr_scheduler_config = parameter_group.config.learning_rate_scheduler
+        # get unique lr_gain factors from parameter metas of the group
+        unique_lr_gain_factors = set([m.lr_gain for m in parameter_group.parameter_metas])
+        if topology.config.pipe_parallel_size > 1:
+            # There may be different lr gains on different pipe stages. We sync them
+            # to ensure that the same param groups exist everywhere (some are empty).
+            unique_lr_gain_factors_from_all_pipe_stages: list[set] = [
+                set() for _ in range(topology.config.pipe_parallel_size)
+            ]
+            torch.distributed.all_gather_object(
+                object_list=unique_lr_gain_factors_from_all_pipe_stages,
+                obj=unique_lr_gain_factors,
+                group=topology.pipe_parallel_group,
+            )
+            unique_lr_gain_factors = set.union(*unique_lr_gain_factors_from_all_pipe_stages)
+        for lr_gain in unique_lr_gain_factors:
+            # create new group for every unique lr
+            new_lr_config = LearningRateSchedulerConfig(
+                learning_rate=lr_gain * lr_scheduler_config.learning_rate,
+                learning_rate_minimum=lr_gain * lr_scheduler_config.learning_rate_minimum,
+                learning_rate_decay_style=lr_scheduler_config.learning_rate_decay_style,
+                learning_rate_decay_iters=lr_scheduler_config.learning_rate_decay_iters,
+                learning_rate_warmup_steps=lr_scheduler_config.learning_rate_warmup_steps,
+            )
+
+            new_parameter_list_with_meta = [
+                (n, p, m)
+                for n, p, m in zip(
+                    parameter_group.parameter_names,
+                    parameter_group.parameters_original,
+                    parameter_group.parameter_metas,
+                )
+                if (
+                    m.lr_gain == lr_gain and n != "dummy_parameter"
+                )  # TODO: look into why this breaks without dummy check
+            ]
+
+            new_parameter_groups.append(
+                OptimizerParamGroup(
+                    named_parameters_with_meta=new_parameter_list_with_meta,
+                    config=OptimizerParamGroupConfig(
+                        name=f"{parameter_group.config.name}_lr_gain_{lr_gain}",
+                        learning_rate_scheduler=new_lr_config,
+                        weight_decay=parameter_group.config.weight_decay,
+                        independent_weight_decay=parameter_group.config.independent_weight_decay,
+                    ),
+                )
+            )
+
+    return new_parameter_groups

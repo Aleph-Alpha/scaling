@@ -6,6 +6,7 @@ import pytest
 from scaling.transformer.utils.get_tflops import HardwareType
 
 
+@pytest.mark.transformer
 @pytest.mark.parametrize(
     "expected,name",
     [
@@ -22,6 +23,7 @@ def test_get_via_torch_all(expected: HardwareType, name: str) -> None:
         assert expected == HardwareType.get_via_torch()
 
 
+@pytest.mark.transformer
 def test_get_via_torch():
     """
     Assert that we know the GPU the tests run on
@@ -30,6 +32,7 @@ def test_get_via_torch():
         HardwareType.get_via_torch()
 
 
+@pytest.mark.transformer
 def test_max_tflops():
     """
     Test that the max_tflops property works for all defined hardware types

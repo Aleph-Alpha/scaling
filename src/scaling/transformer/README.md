@@ -45,10 +45,7 @@ Make sure to set the following parameters
 {
     "training": {
         # enable parameter selection by regex
-        "finetune": true,
-
-        # regular expressions selecting all parameters for training to which it applies
-        "finetunable_parameters": ["nice_new_bias"],
+        "allow_missing_params_in_optimizer": true,
 
         # regular expression to not select parameters for which the above selection applies
         "parameters_exclude": ["nice_new_bias_from_previous_training"],

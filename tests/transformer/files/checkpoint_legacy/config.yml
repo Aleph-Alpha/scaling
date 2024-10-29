@@ -1,0 +1,204 @@
+{
+    "version": ".unknown.",
+    "runner": {
+        "runner_type": "pdsh",
+        "hostsfile": null,
+        "hosts": null,
+        "master_port": 29500,
+        "master_addr": null,
+        "script": null,
+        "default_gpu_count": 8,
+        "docker_config": {
+            "docker_container": null,
+            "docker_sudo": false,
+            "docker_mounts": null
+        },
+        "use_determined": false
+    },
+    "logger": {
+        "log_level": "info",
+        "log_dir": null,
+        "metrics_ranks": null,
+        "use_wandb": false,
+        "wandb_ranks": null,
+        "wandb_host": "https://api.wandb.ai",
+        "wandb_team": "aleph-alpha",
+        "wandb_project": "aleph-alpha-scaling",
+        "wandb_group": "debug-2024-08-22-11-01-11",
+        "wandb_api_key": null,
+        "use_tensorboard": false,
+        "tensorboard_ranks": null,
+        "determined_metrics_ranks": null
+    },
+    "topology": {
+        "global_rank": 0,
+        "world_size": 1,
+        "local_slot": 0,
+        "model_parallel_size": 1,
+        "pipe_parallel_size": 1,
+        "data_parallel_size": 1,
+        "global_batch_size": 2,
+        "micro_batch_size": 2,
+        "gradient_accumulation_steps": 1,
+        "pipe_partition_method": "uniform",
+        "pipe_partition_overwrite": null,
+        "activation_checkpointing_type": "disabled",
+        "sequence_parallel": false
+    },
+    "optimizer": {
+        "method": "adamw",
+        "beta1": 0.9,
+        "beta2": 0.95,
+        "eps": 1e-08,
+        "gradient_clipping": 1.0,
+        "allreduce_bucket_size": 500000000,
+        "loss_scaler": {
+            "enable": false,
+            "initial_scale": 4294967296.0,
+            "window": 1000,
+            "hysteresis": 2.0,
+            "consecutive_hysteresis": false,
+            "min_scale": 1.0,
+            "factor": 2.0
+        },
+        "zero": false,
+        "zero_save_static": false,
+        "debug_log": false
+    },
+    "learning_rate_scheduler": {
+        "learning_rate": 0.0,
+        "learning_rate_minimum": 0.0,
+        "learning_rate_decay_style": "cosine",
+        "learning_rate_decay_iters": 0,
+        "learning_rate_warmup_steps": 0
+    },
+    "embedding_learning_rate_scheduler": {
+        "learning_rate": 0.0,
+        "learning_rate_minimum": 0.0,
+        "learning_rate_decay_style": "cosine",
+        "learning_rate_decay_iters": 0,
+        "learning_rate_warmup_steps": 0
+    },
+    "training": {
+        "weight_decay": 0.0001,
+        "allow_missing_params_in_optimizer": false,
+        "use_separate_lr_on_embeddings": false,
+        "use_deterministic_torch_algorithms": false
+    },
+   "training_groups": [
+        {
+            "group_name": "param_group",
+            "parameters_include": [],
+            "parameters_exclude": [],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.1,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ],
+    "trainer": {
+        "save_dir": "/nfs/scratch_2/gregor.ziegltrum/test_checkpoints",
+        "save_interval": 2,
+        "load_dir": null,
+        "train_iterations": 3,
+        "assert_checkpoint_loaded": false,
+        "load_optimizer_states": false,
+        "delete_past_optimizer_states": true,
+        "load_context": false,
+        "allowed_missing_keys_in_checkpoint": null,
+        "allowed_unexpected_keys_in_checkpoint": null,
+        "ignore_keys_in_checkpoint": null,
+        "merge_lora_after_loading_checkpoint": false,
+        "seed": 42,
+        "dataloader_num_workers": 0,
+        "dataloader_pin_memory": true,
+        "dataloader_prefetch_factor": null,
+        "eval_iterations": 1,
+        "eval_interval": null,
+        "separate_file_for_parameters": null
+    },
+    "profiler": {
+        "profile_steps": 0,
+        "profile_start_at_step": 10,
+        "profiler_output": null
+    },
+    "luminous_architecture": {
+        "vocab_size": 2048,
+        "vocab_file": "/nfs/scratch_2/max/spotless/gregor_test/vocab.json",
+        "hidden_size": 2,
+        "num_layers": 1,
+        "num_attention_heads": 1,
+        "num_local_attention_heads": 0,
+        "local_attention_window_size": null,
+        "rotary_embedding_base": 10000,
+        "rotary_percentage": 1.0,
+        "sequence_length": 1024,
+        "norm_type": "rms",
+        "relative_position_embedding_type": "none",
+        "mlp_type": "swiglu",
+        "mlp_factor": 2.5,
+        "attention_bias": false,
+        "attention_qkv_in_one": true,
+        "attention_num_kv_heads": null,
+        "attention_use_matmul": false,
+        "mlp_bias": false,
+        "key_query_norm": false,
+        "weight_tying": false,
+        "masked_softmax": {
+            "kernel": "torch",
+            "softmax_in_fp32": false,
+            "scale": 1.0,
+            "deterministic_flash_attn_bwd": false
+        },
+        "layernorm": {
+            "optimization_type": "torch",
+            "layernorm_epsilon": 1e-05
+        },
+        "precision": "bfloat16",
+        "dropout_embedding": 0.0,
+        "dropout_attention_probs": 0.0,
+        "dropout_after_attention": 0.0,
+        "dropout_after_mlp": 0.0,
+        "bitfit_bias_config": null,
+        "finetunable_token_ids": [],
+        "image_encoder": false,
+        "dropout_image_encoder": 0.0,
+        "softprompt_config": null,
+        "adapter_config": null,
+        "lora_config": null,
+        "embedding_head_config": null,
+        "causal": true
+    },
+    "data": {
+        "legacy_dataset": false,
+        "load_mmap_index_to_memory": false,
+        "use_mmap": true,
+        "load_data_item_mmap_index_to_memory": false,
+        "finetuning_dataset": false,
+        "finetuning_chat_dataset": true,
+        "finetuning_dataset_memory_map": true,
+        "data_prefixes": [
+            "/nfs/scratch_2/max/spotless/aleph-alpha-scaling/tests/transformer/files/dataset/finetuning_chat.jsonl"
+        ],
+        "validation_data_prefixes": null,
+        "blended_dataset": {
+            "weight_by_num_documents": true,
+            "weighted_sampler_alpha": 1.0,
+            "weights": null,
+            "weight_examples_proportional": false,
+            "ep_maximum": null,
+            "ep_temperature": 1.0,
+            "minimum_dataset_size": 0,
+            "cache_directory": "/tmp/pytest-of-gregor_ziegltrum/pytest-91/test_legacy_checkpoint_loading0",
+            "shuffle_dataset_indices": false,
+            "load_dataset_indices_to_memory": false
+        },
+        "only_full_sequences": false,
+        "allow_incomplete_sequences_every_n": 0
+    },
+    "determined_experiment_id": null,
+    "determined_trial_id": null
+}

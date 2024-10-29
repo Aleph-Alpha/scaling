@@ -1,4 +1,5 @@
 import shutil
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict
 
@@ -12,8 +13,7 @@ from scaling.core.utils.port import find_free_port
 from scaling.transformer.context import TransformerConfig
 from scaling.transformer.tokenizer import Tokenizer
 from scaling.transformer.train import main
-
-from .utils import dist_launcher
+from tests.core.utils import dist_launcher
 
 
 def load_full_separated_checkpoint(checkpoint_file: Path):
@@ -42,6 +42,7 @@ def construct_basic_training_config(
     finetuning_dataset_memory_map: bool = False,
     masked_softmax: dict = {"kernel": "torch"},
     data_prefixes: list | None = None,
+    weight_tying=False,
 ):
     if world_size > torch.cuda.device_count():
         pytest.skip(
@@ -80,15 +81,20 @@ def construct_basic_training_config(
                 "enable": enable_loss_scaling,
                 "initial_scale": 16,  # set low initial loss scale to actually perform a train step in this short test
             },
-            "zero": True,
+            "zero": False,
         },
-        "learning_rate_scheduler": {
-            "learning_rate": 0.01,
-            "learning_rate_minimum": 0.0,
-            "learning_rate_decay_style": "cosine",
-            "learning_rate_warmup_steps": 2,
-            "learning_rate_decay_iters": 10,
-        },
+        "training_groups": [
+            {
+                "group_name": "param_group",
+                "learning_rate_scheduler": {
+                    "learning_rate": 0.01,
+                    "learning_rate_minimum": 0.0,
+                    "learning_rate_decay_style": "cosine",
+                    "learning_rate_warmup_steps": 2,
+                    "learning_rate_decay_iters": 10,
+                },
+            }
+        ],
         "trainer": {
             "save_dir": str(cache_dir),
             "save_interval": 6,
@@ -96,20 +102,17 @@ def construct_basic_training_config(
             "train_iterations": 10,
             "assert_checkpoint_loaded": False,
         },
-        "training": {
-            "parameters_exclude": [],
-        },
         "logger": {"log_level": "debug", "log_dir": str(cache_dir / "logs")},
         "profiler": {"profile_steps": 2, "profile_start_at_step": 1},
         "data": data_config,
         "transformer_architecture": {
-            "weight_tying": False,
+            "weight_tying": weight_tying,
             "vocab_size": 128000,
             "vocab_file": Path(__file__).parents[0] / "files" / "alpha-001-128k.json",
             "sequence_length": 256,
             "hidden_size": 64,
-            "num_attention_heads": 4,
-            "num_layers": 24,
+            "num_attention_heads": 2,
+            "num_layers": 2,
             "precision": precision,
             "dropout_embedding": 0.1,
             "dropout_attention_probs": 0.1,
@@ -130,6 +133,7 @@ def run_test_finetuning(return_dict: dict, config_dict: dict):
     return_dict["losses"] = losses
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -211,8 +215,20 @@ def test_transformer_softprompt_finetuning(
     # softprompt specific
     config_dict["transformer_architecture"]["softprompt_config"] = {"name": "finetuning", "n_tokens": 8}
 
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ["finetuning"]
+    config_dict["training"] = {"allow_missing_params_in_optimizer": True}
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ["finetuning"],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
 
     config_loaded = TransformerConfig.from_dict(config_dict)
 
@@ -274,6 +290,7 @@ def test_transformer_softprompt_finetuning(
     assert softprompt_parameter_count > 0, "there have been no softprompt finetuned parameters found"
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -367,8 +384,21 @@ def test_transformer_adapter_finetuning(
         "mlp_downsampling_factor": 0.25,
         "init_std": 0.1,
     }
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ["finetuning"]
+
+    config_dict["training"] = {"allow_missing_params_in_optimizer": True}
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ["finetuning"],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
 
     config_loaded = TransformerConfig.from_dict(config_dict)
 
@@ -424,6 +454,7 @@ def test_transformer_adapter_finetuning(
             assert (baseline[k] == trained_global_step2[k]).all(), f"parameter '{k}' was trained"
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -504,8 +535,20 @@ def test_transformer_bitfit_finetuning(
     # bitfit specific
     config_dict["transformer_architecture"]["bitfit_bias_config"] = {"name": "finetuning"}
 
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ["finetuning"]
+    config_dict["training"] = {"allow_missing_params_in_optimizer": True}
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ["finetuning"],
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
 
     # allowed_missing_keys_in_checkpoint
     config_dict["trainer"]["allowed_missing_keys_in_checkpoint"] = [
@@ -573,6 +616,7 @@ def test_transformer_bitfit_finetuning(
             assert (baseline[k] == trained_global_step2[k]).all(), f"parameter '{k}' was trained"
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -619,8 +663,21 @@ def test_transformer_finetuning_with_ignore_keys_in_checkpoint(
     config_dict["trainer"]["load_context"] = False
     config_dict["trainer"]["save_interval"] = 2
     config_dict["trainer"]["train_iterations"] = 4
-    config_dict["training"]["finetune"] = True
-    config_dict["training"]["finetunable_parameters"] = ignore_keys_in_checkpoint
+    config_dict["training"] = {"allow_missing_params_in_optimizer": True}
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": ignore_keys_in_checkpoint,
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
+
     config_loaded = TransformerConfig.from_dict(config_dict)
     _ = dist_launcher(
         run_func=run_test_finetuning,
@@ -630,6 +687,7 @@ def test_transformer_finetuning_with_ignore_keys_in_checkpoint(
     )
 
 
+@pytest.mark.finetuning
 @pytest.mark.parametrize(
     "model_parallel_size,pipe_parallel_size,world_size",
     [
@@ -639,32 +697,38 @@ def test_transformer_finetuning_with_ignore_keys_in_checkpoint(
     ],
 )
 @pytest.mark.parametrize(
-    "finetunable_parameters",
+    "parameters_include",
     [
-        ["embedding.weight"],
-        ["embedding.weight", "mlp.dense_in.weight"],
+        {"embedding.weight"},
+        {"embedding.weight", "mlp.dense_in.weight"},
     ],
 )
-@pytest.mark.parametrize("weight_tying", [True, False])
+@pytest.mark.parametrize(
+    "weight_tying,finetunable_param,finetunable_layer",
+    [(False, "linear.weight", "TransformerLMHead"), (True, "embedding.weight", "TransformerLMHeadTied")],
+)
 def test_transformer_finetune_embedding(
     tmp_path: Path,
     model_parallel_size: int,
     pipe_parallel_size: int,
     world_size: int,
-    finetunable_parameters: list[str],
+    parameters_include: set[str],
+    finetunable_param: str,
+    finetunable_layer: str,
     weight_tying: bool,
 ):
+    parameters_include = parameters_include | {finetunable_param}
     prefix_path_memory_map = tmp_path / "fine_tuned_embedding" / "enriched_training_tokens"
     tokenizer_path = Path(__file__).parents[0] / "files" / "alpha-001-128k.json"
     tokenizer = Tokenizer.from_file(str(tokenizer_path))
     builder = MemoryMapDatasetBuilder(prefix_path=Path(prefix_path_memory_map))
-    token_ids = tokenizer.encode("Abra kadabra zweimal schwarzer Kater") + [tokenizer.eos_token_id]
+    ids = tokenizer.encode("Abra kadabra zweimal schwarzer Kater") + [tokenizer.eos_token_id]
 
     finetunable_token_ids = [0, 77, 222, 127995]
 
-    token_ids += [i for i in range(4)] + finetunable_token_ids + [tokenizer.eos_token_id]
+    ids += [i for i in range(4)] + [i + 64000 for i in range(4)] + finetunable_token_ids + [tokenizer.eos_token_id]
     for _ in range(10):
-        builder.add(np_array=np.array(token_ids))
+        builder.add(np_array=np.array(ids))
     builder.finalize()
 
     config_dict = construct_basic_training_config(
@@ -677,13 +741,11 @@ def test_transformer_finetune_embedding(
         enable_loss_scaling=False,
         precision="bfloat16",
         finetuning_dataset_memory_map=True,
+        weight_tying=weight_tying,
     )
 
     config_dict["trainer"]["assert_checkpoint_loaded"] = False
-    config_dict["training"]["finetune"] = True
-    config_dict["transformer_architecture"]["weight_tying"] = True
-    config_dict["transformer_architecture"]["finetunable_token_ids"] = finetunable_token_ids
-    config_dict["training"]["finetunable_parameters"] = finetunable_parameters
+    config_dict["training"] = {"allow_missing_params_in_optimizer": False}
     config_dict["data"]["data_prefixes"] = [prefix_path_memory_map]
 
     config = TransformerConfig.from_dict(config_dict)
@@ -710,11 +772,24 @@ def test_transformer_finetune_embedding(
     config_dict["trainer"]["assert_checkpoint_loaded"] = True
     config_dict["trainer"]["load_optimizer_states"] = False
     config_dict["trainer"]["load_context"] = False
+    config_dict["training"] = {"allow_missing_params_in_optimizer": True}
+    config_dict["transformer_architecture"]["finetunable_token_ids"] = finetunable_token_ids
+
+    config_dict["training_groups"] = [
+        {
+            "group_name": "param_group",
+            "parameters_include": parameters_include,
+            "learning_rate_scheduler": {
+                "learning_rate": 0.01,
+                "learning_rate_minimum": 0.0,
+                "learning_rate_decay_style": "cosine",
+                "learning_rate_warmup_steps": 2,
+                "learning_rate_decay_iters": 10,
+            },
+        }
+    ]
 
     config_loaded = TransformerConfig.from_dict(config_dict)
-
-    # Train up to 10 steps
-    # This function will checkpoint after 6 steps so that when called again four more steps are run
     _ = dist_launcher(
         run_func=run_test_finetuning,
         world_size=world_size,
@@ -722,26 +797,35 @@ def test_transformer_finetune_embedding(
         config_dict=config_loaded.as_dict(),
     )
     assert_reached = [False, False]
+    layers_to_check = {"EmbeddingInput", finetunable_layer}
+    layers_checked = set()
+    token_ids_checked = defaultdict(set)
     ### compare new checkpoint to see that frozen weights are actually frozen and biases are changed
     for checkpoint_file in baseline_checkpoint_path.glob("*.pt"):
         if not checkpoint_file.name.startswith("model_state"):
             continue
-
         trained_global_step2 = load_full_separated_checkpoint(save_dir_path / "global_step2" / checkpoint_file.name)
-
-        if "TransformerEmbeddingInput" in str(checkpoint_file) or "LMHead" in str(checkpoint_file):
+        current_layer = next((x for x in layers_to_check if x in str(checkpoint_file)), None)
+        if current_layer is not None:
+            layers_checked.add(current_layer)
             trained_global_step4 = load_full_separated_checkpoint(save_dir_path / "global_step4" / checkpoint_file.name)
-
-            for finetunable_parameter in finetunable_parameters:
+            broken_ids = set()
+            for finetunable_parameter in parameters_include:
                 if finetunable_parameter in trained_global_step2:
                     for token_id, (old_embedding, new_embedding) in enumerate(
                         zip(trained_global_step2[finetunable_parameter], trained_global_step4[finetunable_parameter])
                     ):
                         if token_id in finetunable_token_ids:
+                            token_ids_checked[current_layer].add(token_id)
                             assert_reached[0] = True
                             assert not torch.all(old_embedding == new_embedding)
                         else:
                             assert_reached[1] = True
-                            assert torch.all(old_embedding == new_embedding)
+                            if not torch.all(old_embedding == new_embedding):
+                                broken_ids.add(token_id)
+            assert broken_ids == set()
     assert all(assert_reached)
+    assert layers_checked == layers_to_check
+    assert all(token_ids_checked[layer] == set(finetunable_token_ids) for layer in layers_to_check)
+
     shutil.rmtree(tmp_path)

@@ -11,12 +11,12 @@ from PIL import Image  # type: ignore
 from scaling.core import (
     BaseBlendedDataset,
     BaseDataset,
-    BaseDatasetItem,
     MemoryMapDataset,
     MemoryMapDatasetBuilder,
     Topology,
     broadcast_data,
 )
+from scaling.transformer.data.dataset_item import TextImageDatasetItem
 from scaling.transformer.data.utils import get_cumulative_seq_lengths
 from scaling.transformer.model.image_encoder import clip_transform
 from scaling.transformer.tokenizer import Tokenizer
@@ -27,36 +27,7 @@ IMAGE_ENCODER_TOKEN_COUNTS = 144  # TODO so far this is constant
 IMAGE_TRANSFORM_FN = clip_transform((384, 384))  # TODO so far this is constant
 
 
-class FinetuningTextDatasetItem(BaseDatasetItem):
-    input_token_ids: torch.Tensor
-    target_token_ids: torch.Tensor
-    cumulative_seq_lengths: torch.Tensor
-    position_ids: torch.Tensor
-    loss_weights: torch.Tensor
-    input_images: list[torch.Tensor] | None
-    input_image_locations: list[tuple[int, int]] | None
-
-    def __init__(
-        self,
-        input_token_ids: torch.Tensor,
-        target_token_ids: torch.Tensor,
-        cumulative_seq_lengths: torch.Tensor,
-        position_ids: torch.Tensor,
-        loss_weights: torch.Tensor,
-        input_images: list[torch.Tensor] | None = None,
-        input_image_locations: list[tuple[int, int]] | None = None,
-    ):
-        super().__init__()
-        self.input_token_ids = input_token_ids
-        self.target_token_ids = target_token_ids
-        self.cumulative_seq_lengths = cumulative_seq_lengths
-        self.position_ids = position_ids
-        self.loss_weights = loss_weights
-        self.input_images = input_images
-        self.input_image_locations = input_image_locations
-
-
-class FinetuningTextDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBatch, TextDatasetBatch]):
+class FinetuningTextDataset(BaseDataset[TextImageDatasetItem, TextDatasetBatch, TextDatasetBatch]):
     """
     Torch dataset providing tokenized text of always the same sequence length; data is loaded from a memory map.
 
@@ -146,8 +117,8 @@ class FinetuningTextDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
     def __len__(self) -> int:
         return len(self.data)
 
-    def __getitem__(self, index: int) -> FinetuningTextDatasetItem:
-        eos_token_id: int = self.tokenizer.eos_token_id
+    def __getitem__(self, index: int) -> TextImageDatasetItem:
+        padding_token_id: int = self.tokenizer.padding_token_id
         prompt_token_ids: list[int]
         completion_token_ids: list[int]
         if self.memory_map_dataset:
@@ -179,7 +150,7 @@ class FinetuningTextDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
 
         padding_size = self.sequence_length - len(prompt_token_ids) - len(completion_token_ids) + 1
 
-        token_ids = prompt_token_ids + completion_token_ids + [eos_token_id] * padding_size
+        token_ids = prompt_token_ids + completion_token_ids + [padding_token_id] * padding_size
         if len(token_ids) > self.sequence_length + 1:
             token_ids = token_ids[: (self.sequence_length + 1)]
 
@@ -197,7 +168,7 @@ class FinetuningTextDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
         if (padding_size - 1) > 0:
             loss_weights[-(padding_size - 1) :] = 0
 
-        return FinetuningTextDatasetItem(
+        return TextImageDatasetItem(
             input_token_ids=input_token_ids,
             target_token_ids=target_token_ids,
             cumulative_seq_lengths=cumulative_seq_lengths,
@@ -248,7 +219,7 @@ class FinetuningTextDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
                                 len(prompt_token_ids) + IMAGE_ENCODER_TOKEN_COUNTS,
                             )
                         )
-                        prompt_token_ids.extend([self.tokenizer.eos_token_id] * IMAGE_ENCODER_TOKEN_COUNTS)
+                        prompt_token_ids.extend([self.tokenizer.padding_token_id] * IMAGE_ENCODER_TOKEN_COUNTS)
                     else:
                         if i == 0:
                             prompt_token_ids.extend(self.tokenizer.encode(p))
@@ -276,7 +247,7 @@ class FinetuningTextDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
             prompt_image_locations,
         )
 
-    def collate(self, batch: list[FinetuningTextDatasetItem]) -> TextDatasetBatch:
+    def collate(self, batch: list[TextImageDatasetItem]) -> TextDatasetBatch:
         """
         Used to collate lists of samples into batches
         The default implementation returns a BaseDataBatch NamedTuple with the same attributes as the first element
@@ -419,7 +390,7 @@ class FinetuningTextDataset(BaseDataset[FinetuningTextDatasetItem, TextDatasetBa
 
 class FinetuningTextBlendedDataset(
     BaseBlendedDataset[
-        FinetuningTextDatasetItem,
+        TextImageDatasetItem,
         TextDatasetBatch,
         TextDatasetBatch,
         FinetuningTextDataset,

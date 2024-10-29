@@ -4,10 +4,10 @@ from typing import Any, Optional, Sequence
 
 import torch
 
-from ...data import BaseLayerIO
-from ...topology import PipePartitionMethod
-from .layer_spec import LayerSpec, TiedLayerSpec
-from .partitioned_module import PipePartitionedModule
+from scaling.core.data import BaseLayerIO
+from scaling.core.nn.parallel_module.layer_spec import LayerSpec, TiedLayerSpec
+from scaling.core.nn.parallel_module.partitioned_module import PipePartitionedModule
+from scaling.core.topology import PipePartitionMethod
 
 
 @dataclass

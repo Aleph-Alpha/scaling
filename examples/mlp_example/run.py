@@ -1,10 +1,8 @@
 import argparse
 
+from examples.mlp_example.config import MLPConfig
 from scaling.core import runner_main
 from scaling.core.logging import logger
-
-from examples.mlp_example.config import MLPConfig
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

@@ -4,6 +4,7 @@ import torch
 from scaling.core import RotaryConfig, RotaryEmbedding, RotaryEmbeddingComplex
 
 
+@pytest.mark.transformer_module
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
 @pytest.mark.parametrize("seq_len", [10, 17])
 @pytest.mark.parametrize("hidden_size_per_attention_head", [2, 8, 16])
@@ -79,6 +80,7 @@ def test_rotary(
     assert (key_rot[1:, :, :] == key_rot_offset).all(), "query offset not applied correctly"
 
 
+@pytest.mark.transformer_module
 @pytest.mark.parametrize("dtype", [torch.float32])
 @pytest.mark.parametrize("seq_len", [10, 17])
 @pytest.mark.parametrize("hidden_size_per_attention_head", [2, 8, 16])

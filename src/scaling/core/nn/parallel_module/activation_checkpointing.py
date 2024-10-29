@@ -66,7 +66,7 @@ from torch.utils.checkpoint import (
     weakref,
 )
 
-from ...topology import Topology
+from scaling.core.topology import Topology
 
 
 def _checkpoint_without_reentrant(

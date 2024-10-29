@@ -5,9 +5,9 @@ from typing import Generator, Mapping, NamedTuple, Optional
 
 import torch
 
-from ..topology import Topology
-from .profiler_config import ProfilerConfig
-from .timer import SynchronizedTimer
+from scaling.core.profiler.profiler_config import ProfilerConfig
+from scaling.core.profiler.timer import SynchronizedTimer
+from scaling.core.topology import Topology
 
 
 class ProfilerObservation(NamedTuple):

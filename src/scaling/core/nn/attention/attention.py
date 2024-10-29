@@ -6,13 +6,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 import gc
-import math
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 from einops import rearrange
 
+from scaling.core.fp8 import FP8LinearConfig
 from scaling.core.nn.linear import ColumnParallelLinear, RowParallelLinear
 from scaling.core.nn.linear.utils import (
     all_concat,
@@ -21,9 +21,16 @@ from scaling.core.nn.linear.utils import (
 )
 from scaling.core.nn.lora import ParallelLoRa
 from scaling.core.nn.lora_config import LoRaConfig, LoRAModuleType
-from scaling.core.nn.masked_softmax import MaskedSoftmax, MaskedSoftmaxConfig, MaskedSoftmaxKernel
+from scaling.core.nn.masked_softmax import (
+    MaskedSoftmax,
+    MaskedSoftmaxConfig,
+    MaskedSoftmaxKernel,
+)
 from scaling.core.nn.norm import LayerNorm, LayerNormConfig, NormType, RMSNorm, get_norm
+from scaling.core.nn.parameter_meta import UMUP_WEIGHT_TYPE
 from scaling.core.nn.rotary import RotaryConfig, RotaryEmbedding, RotaryEmbeddingComplex
+from scaling.core.nn.scale import scale_bwd, scale_fwd
+from scaling.core.nn.umup import UMuParametrization
 from scaling.core.topology import Topology
 
 try:
@@ -81,7 +88,12 @@ def cumulative_seq_lengths_to_dense_attention_mask(
         [
             torch.block_diag(
                 *[
-                    torch.ones(block_size, block_size, dtype=torch.bool, device=cumulative_seq_lengths.device)
+                    torch.ones(
+                        block_size,
+                        block_size,
+                        dtype=torch.bool,
+                        device=cumulative_seq_lengths.device,
+                    )
                     for block_size in block_sizes
                 ]
             )
@@ -265,6 +277,235 @@ class RelativePositionEmbeddingType(Enum):
     ROTARY_COMPLEX = "rotary_complex"
 
 
+class ScaledDotProductAttention(torch.nn.Module):
+    def __init__(
+        self,
+        head_dim: int,
+        dropout_p: float,
+        masked_softmax_config: MaskedSoftmaxConfig,
+        causal: bool,
+        use_matmul: bool = False,
+        umup_mult: Optional[float] = None,
+    ):
+        super().__init__()
+
+        self.head_dim = head_dim
+        self.dropout_p = dropout_p
+        self.softmax_fn = MaskedSoftmax(masked_softmax_config)
+        self.dropout_fn = torch.nn.Dropout(p=dropout_p)
+        self.masked_softmax_config = masked_softmax_config
+        self.query_key_scaling_factor: float = 1 / (head_dim**0.5)  # defaults to non-mup standard scaling
+        self.causal = causal
+        self.use_matmul = use_matmul
+
+        # umup parameters
+        self.umup_mult = umup_mult
+        self.output_scale_factor: float
+        self._use_umup: bool = False
+
+    def _standard_forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cumulative_seq_lengths: torch.Tensor,
+        attention_scores_manipulation: Optional[torch.Tensor] = None,
+        attentions_score_manipulation_log_additive: Union[bool, List[bool]] = True,
+    ) -> torch.Tensor:
+        return multi_head_attention(
+            query=query,
+            key=key,
+            value=value,
+            cumulative_seq_lengths=cumulative_seq_lengths,
+            causal=self.causal,
+            query_key_scaling_factor=self.query_key_scaling_factor,
+            softmax_fn=self.softmax_fn,
+            dropout_fn=self.dropout_fn,
+            attention_scores_manipulation=attention_scores_manipulation,
+            attentions_score_manipulation_log_additive=attentions_score_manipulation_log_additive,
+            use_matmul=self.use_matmul,
+        )
+
+    def umup_setup(self, avg_sequence_length: int, **kwargs: Any) -> None:
+        assert self.umup_mult is not None
+        self._use_umup = True
+        assert self.causal, "umup currently only implemented for causal attention"  # TODO
+        (
+            self.query_key_scaling_factor,
+            self.output_scale_factor,
+        ) = UMuParametrization.get_umup_attention_scales(
+            head_dim=self.head_dim,
+            sequence_length=avg_sequence_length,
+            mult=self.umup_mult,
+            dropout_p=self.dropout_p,
+        )
+
+    def _umup_forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cumulative_seq_lengths: torch.Tensor,
+        attention_scores_manipulation: Optional[torch.Tensor] = None,
+        attentions_score_manipulation_log_additive: Union[bool, List[bool]] = True,
+    ) -> torch.Tensor:
+        query = scale_bwd(query, self.output_scale_factor)
+        key = scale_bwd(key, self.output_scale_factor)
+        value = scale_bwd(value, self.output_scale_factor)
+
+        output = self._standard_forward(
+            query=query,
+            key=key,
+            value=value,
+            cumulative_seq_lengths=cumulative_seq_lengths,
+            attention_scores_manipulation=attention_scores_manipulation,
+            attentions_score_manipulation_log_additive=attentions_score_manipulation_log_additive,
+        )
+
+        output = scale_fwd(output, self.output_scale_factor)
+
+        return output
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cumulative_seq_lengths: torch.Tensor,
+        attention_scores_manipulation: Optional[torch.Tensor] = None,
+        attentions_score_manipulation_log_additive: Union[bool, List[bool]] = True,
+    ) -> torch.Tensor:
+        if self._use_umup:
+            return self._umup_forward(
+                query=query,
+                key=key,
+                value=value,
+                cumulative_seq_lengths=cumulative_seq_lengths,
+                attention_scores_manipulation=attention_scores_manipulation,
+                attentions_score_manipulation_log_additive=attentions_score_manipulation_log_additive,
+            )
+        else:
+            return self._standard_forward(
+                query=query,
+                key=key,
+                value=value,
+                cumulative_seq_lengths=cumulative_seq_lengths,
+                attention_scores_manipulation=attention_scores_manipulation,
+                attentions_score_manipulation_log_additive=attentions_score_manipulation_log_additive,
+            )
+
+
+class FlashAttention(torch.nn.Module):
+    def __init__(
+        self,
+        head_dim: int,
+        dropout_p: float,
+        masked_softmax_config: MaskedSoftmaxConfig,
+        num_local_attention_heads: int,
+        causal: bool,
+        local_attention_window_size: Optional[int] = None,
+        umup_mult: Optional[float] = None,
+    ):
+        super().__init__()
+
+        self.head_dim = head_dim
+        self.dropout_p = dropout_p
+        self.masked_softmax_config = masked_softmax_config
+        self.query_key_scaling_factor: float = 1 / (head_dim**0.5)  # defaults to non-mup standard scaling
+        self.num_local_attention_heads = num_local_attention_heads
+        self.causal = causal
+        self.local_attention_window_size = local_attention_window_size
+
+        # umup parameters
+        self.umup_mult = umup_mult
+        self.output_scale_factor: float
+        self._use_umup: bool = False
+
+    def _standard_forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cumulative_seq_lengths_query: torch.Tensor,
+        cumulative_seq_lengths_key: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return flash_attention(
+            query=query,
+            key=key,
+            value=value,
+            cumulative_seq_lengths_query=cumulative_seq_lengths_query,
+            causal=self.causal,
+            query_key_scaling_factor=self.query_key_scaling_factor,
+            dropout_attention_probs=self.dropout_p,
+            cumulative_seq_lengths_key=cumulative_seq_lengths_key,
+            local_attention_window_size=self.local_attention_window_size,
+            deterministic_bwd=self.masked_softmax_config.deterministic_flash_attn_bwd,
+        )
+
+    def umup_setup(self, avg_sequence_length: int, **kwargs: Any) -> None:
+        assert self.umup_mult is not None
+        self._use_umup = True
+        assert self.causal, "umup currently only implemented for causal attention"  # TODO
+        (
+            self.query_key_scaling_factor,
+            self.output_scale_factor,
+        ) = UMuParametrization.get_umup_attention_scales(
+            head_dim=self.head_dim,
+            sequence_length=avg_sequence_length,
+            mult=self.umup_mult,
+            dropout_p=self.dropout_p,
+        )
+
+    def _umup_forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cumulative_seq_lengths_query: torch.Tensor,
+        cumulative_seq_lengths_key: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        query = scale_bwd(query, self.output_scale_factor)
+        key = scale_bwd(key, self.output_scale_factor)
+        value = scale_bwd(value, self.output_scale_factor)
+
+        output = self._standard_forward(
+            query=query,
+            key=key,
+            value=value,
+            cumulative_seq_lengths_query=cumulative_seq_lengths_query,
+            cumulative_seq_lengths_key=cumulative_seq_lengths_key,
+        )
+
+        output = scale_fwd(output, self.output_scale_factor)
+
+        return output
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        cumulative_seq_lengths_query: torch.Tensor,
+        cumulative_seq_lengths_key: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        if self._use_umup:
+            return self._umup_forward(
+                query=query,
+                key=key,
+                value=value,
+                cumulative_seq_lengths_query=cumulative_seq_lengths_query,
+                cumulative_seq_lengths_key=cumulative_seq_lengths_key,
+            )
+        else:
+            return self._standard_forward(
+                query=query,
+                key=key,
+                value=value,
+                cumulative_seq_lengths_query=cumulative_seq_lengths_query,
+                cumulative_seq_lengths_key=cumulative_seq_lengths_key,
+            )
+
+
 class ParallelSelfAttention(torch.nn.Module):
     def __init__(
         self,
@@ -274,7 +515,6 @@ class ParallelSelfAttention(torch.nn.Module):
         causal: bool = True,
         num_local_attention_heads: int = 0,
         local_attention_window_size: Optional[int] = None,
-        scaling_factor: Optional[float] = None,
         dropout_attention_probs: float = 0.0,
         rotary_config: Optional[RotaryConfig] = None,
         relative_position_embedding_type: RelativePositionEmbeddingType = RelativePositionEmbeddingType.ROTARY,
@@ -291,6 +531,12 @@ class ParallelSelfAttention(torch.nn.Module):
         qkv_in_one: bool = True,
         num_kv_heads: Optional[int] = None,
         use_matmul: bool = False,
+        umup_mult: Optional[float] = None,
+        umup_is_first_layer: Optional[bool] = None,
+        umup_is_last_layer: Optional[bool] = None,
+        umup_on_residual: Optional[bool] = None,
+        fp8_config: Optional[FP8LinearConfig] = None,
+        fp8_config_dense_out: Optional[FP8LinearConfig] = None,
     ) -> None:
         super().__init__()
 
@@ -343,6 +589,14 @@ class ParallelSelfAttention(torch.nn.Module):
 
         self.dtype = dtype
 
+        qkv_weight_type: UMUP_WEIGHT_TYPE | None = None
+        dense_weight_type: UMUP_WEIGHT_TYPE | None = None
+
+        if isinstance(umup_is_first_layer, bool):
+            qkv_weight_type = UMUP_WEIGHT_TYPE.INPUT_WEIGHT if umup_is_first_layer else UMUP_WEIGHT_TYPE.HIDDEN_WEIGHT
+        if isinstance(umup_is_last_layer, bool):
+            dense_weight_type = UMUP_WEIGHT_TYPE.OUTPUT_WEIGHT if umup_is_last_layer else UMUP_WEIGHT_TYPE.HIDDEN_WEIGHT
+
         # initialize
         self.qkv_in_one = qkv_in_one
         self.num_kv_heads = num_kv_heads
@@ -387,6 +641,9 @@ class ParallelSelfAttention(torch.nn.Module):
                 init_method=init_method,
                 bitfit_bias_name=bitfit_bias_name,
                 parallel_output=True,
+                umup_weight_type=qkv_weight_type,
+                umup_on_residual=umup_on_residual,
+                fp8_config=fp8_config,
             )
 
         else:
@@ -400,6 +657,9 @@ class ParallelSelfAttention(torch.nn.Module):
                 init_method=init_method,
                 bitfit_bias_name=bitfit_bias_name,
                 parallel_output=True,
+                umup_weight_type=qkv_weight_type,
+                umup_on_residual=umup_on_residual,
+                fp8_config=fp8_config,
             )
             self.key = ColumnParallelLinear(
                 in_features=hidden_size,
@@ -411,6 +671,9 @@ class ParallelSelfAttention(torch.nn.Module):
                 init_method=init_method,
                 bitfit_bias_name=bitfit_bias_name,
                 parallel_output=True,
+                umup_weight_type=qkv_weight_type,
+                umup_on_residual=umup_on_residual,
+                fp8_config=fp8_config,
             )
             self.value = ColumnParallelLinear(
                 in_features=hidden_size,
@@ -422,13 +685,10 @@ class ParallelSelfAttention(torch.nn.Module):
                 init_method=init_method,
                 bitfit_bias_name=bitfit_bias_name,
                 parallel_output=True,
+                umup_weight_type=qkv_weight_type,
+                umup_on_residual=umup_on_residual,
+                fp8_config=fp8_config,
             )
-        self.use_matmul = use_matmul
-
-        if scaling_factor is None:
-            self.scaling_factor = 1 / math.sqrt(self.hidden_size_per_attention_head)
-        else:
-            self.scaling_factor = scaling_factor
 
         self.rotary_embedding: Optional[Union[RotaryEmbedding, RotaryEmbeddingComplex]] = None
         if relative_position_embedding_type == RelativePositionEmbeddingType.NONE:
@@ -471,8 +731,26 @@ class ParallelSelfAttention(torch.nn.Module):
                 bitfit_bias_name=bitfit_bias_name,
             )
 
-        self.dropout_attention_probs = dropout_attention_probs
-        self.dropout = torch.nn.Dropout(dropout_attention_probs)
+        self.scaled_dot_product_attention: ScaledDotProductAttention | FlashAttention
+        if self.masked_softmax_config.kernel == MaskedSoftmaxKernel.TORCH:
+            self.scaled_dot_product_attention = ScaledDotProductAttention(
+                head_dim=self.hidden_size_per_attention_head,
+                dropout_p=dropout_attention_probs,
+                masked_softmax_config=self.masked_softmax_config,
+                causal=causal,
+                umup_mult=umup_mult,
+                use_matmul=use_matmul,
+            )
+        elif self.masked_softmax_config.kernel == MaskedSoftmaxKernel.FLASH_ATTENTION:
+            self.scaled_dot_product_attention = FlashAttention(
+                head_dim=self.hidden_size_per_attention_head,
+                dropout_p=dropout_attention_probs,
+                masked_softmax_config=masked_softmax_config,
+                num_local_attention_heads=self.num_local_attention_heads,
+                causal=causal,
+                local_attention_window_size=self.local_attention_window_size,
+                umup_mult=umup_mult,
+            )
 
         self.dense = RowParallelLinear(
             in_features=hidden_size,
@@ -484,9 +762,10 @@ class ParallelSelfAttention(torch.nn.Module):
             init_method=init_method,
             parallel_input=True,
             parallel_output=(self.topology.config.sequence_parallel if self.topology is not None else False),
+            umup_weight_type=dense_weight_type,
+            umup_on_residual=umup_on_residual,
+            fp8_config=fp8_config_dense_out,
         )
-
-        self.masked_softmax = MaskedSoftmax(config=masked_softmax_config)
 
         self.cache: Dict[int, Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]] = dict()
 
@@ -565,7 +844,9 @@ class ParallelSelfAttention(torch.nn.Module):
                 key_position_ids=position_ids,
             )
 
-        def get_trivial_cumulative_seq_lengths(activations: torch.Tensor) -> torch.Tensor:
+        def get_trivial_cumulative_seq_lengths(
+            activations: torch.Tensor,
+        ) -> torch.Tensor:
             return torch.tensor([0, activations.shape[0]], device=activations.device, dtype=torch.int32)
 
         if use_cache:
@@ -600,17 +881,12 @@ class ParallelSelfAttention(torch.nn.Module):
             self.num_local_attention_heads <= 0
             or (self.num_local_attention_heads > 0 and self.num_local_attention_heads == self.num_attention_heads)
         ):
-            hidden_state = flash_attention(
+            hidden_state = self.scaled_dot_product_attention(
                 query=query,
                 key=key,
                 value=value,
                 cumulative_seq_lengths_query=cumulative_seq_lengths,
                 cumulative_seq_lengths_key=cumulative_seq_lengths_key,
-                causal=self.causal,
-                query_key_scaling_factor=self.scaling_factor,
-                dropout_attention_probs=self.dropout_attention_probs,
-                local_attention_window_size=self.local_attention_window_size,
-                deterministic_bwd=self.masked_softmax_config.deterministic_flash_attn_bwd,
             )
 
             hidden_state = rearrange(hidden_state, "(b np) sq hn -> b sq (np hn)", b=batch_size)
@@ -622,34 +898,25 @@ class ParallelSelfAttention(torch.nn.Module):
             and self.num_local_attention_heads != self.num_attention_heads
         ):
             # We have to repeat here in order to properly slice the attention heads in to local and global heads.
-            key = repeat_kv(key, self.num_repeat_kv)  # (bs, seqlen, n_heads, head_dim)
-            value = repeat_kv(value, self.num_repeat_kv)  # (bs, seqlen, n_heads, head_dim)
+            key = repeat_kv(key, self.num_repeat_kv)  # (seqlen, bs, n_heads, head_dim)
+            value = repeat_kv(value, self.num_repeat_kv)  # (seqlen, bs, n_heads, head_dim)
 
             # Take the first num_local_attention_heads heads and use them for local attention.
-            local_attention_hidden_state = flash_attention(
+            local_attention_hidden_state = self.scaled_dot_product_attention(
                 query=query[:, :, : self.num_local_attention_heads],
                 key=key[:, :, : self.num_local_attention_heads],
                 value=value[:, :, : self.num_local_attention_heads],
                 cumulative_seq_lengths_query=cumulative_seq_lengths,
                 cumulative_seq_lengths_key=cumulative_seq_lengths_key,
-                causal=self.causal,
-                query_key_scaling_factor=self.scaling_factor,
-                dropout_attention_probs=self.dropout_attention_probs,
-                local_attention_window_size=self.local_attention_window_size,
-                deterministic_bwd=self.masked_softmax_config.deterministic_flash_attn_bwd,
             )
 
             # Take the remaining attention heads and use them for global attention.
-            global_attention_hidden_state = flash_attention(
+            global_attention_hidden_state = self.scaled_dot_product_attention(
                 query=query[:, :, self.num_local_attention_heads :],
                 key=key[:, :, self.num_local_attention_heads :],
                 value=value[:, :, self.num_local_attention_heads :],
                 cumulative_seq_lengths_query=cumulative_seq_lengths,
                 cumulative_seq_lengths_key=cumulative_seq_lengths_key,
-                causal=self.causal,
-                query_key_scaling_factor=self.scaling_factor,
-                dropout_attention_probs=self.dropout_attention_probs,
-                deterministic_bwd=self.masked_softmax_config.deterministic_flash_attn_bwd,
             )
 
             # Reshape both hidden states for concatenation.
@@ -668,21 +935,16 @@ class ParallelSelfAttention(torch.nn.Module):
 
         # Torch Attention
         else:
-            key = repeat_kv(key, self.num_repeat_kv)  # (bs, seqlen, n_local_heads, head_dim)
-            value = repeat_kv(value, self.num_repeat_kv)  # (bs, seqlen, n_local_heads, head_dim)
+            key = repeat_kv(key, self.num_repeat_kv)  # (seqlen, bs, n_local_heads, head_dim)
+            value = repeat_kv(value, self.num_repeat_kv)  # (seqlen, bs, n_local_heads, head_dim)
 
-            hidden_state = multi_head_attention(
+            hidden_state = self.scaled_dot_product_attention(
                 query=query,
                 key=key,
                 value=value,
                 cumulative_seq_lengths=cumulative_seq_lengths,
-                causal=self.causal,
-                query_key_scaling_factor=self.scaling_factor,
-                softmax_fn=self.masked_softmax,
-                dropout_fn=self.dropout,
                 attention_scores_manipulation=attention_scores_manipulation,
                 attentions_score_manipulation_log_additive=attentions_score_manipulation_log_additive,
-                use_matmul=self.use_matmul,
             )
 
             hidden_state = rearrange(hidden_state, "(b np) sq hn -> b sq (np hn)", b=batch_size)
@@ -707,7 +969,11 @@ class ParallelSelfAttention(torch.nn.Module):
         return hidden_state_out
 
     def apply_lora(
-        self, x: torch.Tensor, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
+        self,
+        x: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
     ) -> List[torch.Tensor]:
         assert self.lora_config, "LoRA Config needs to be set in order to apply lora modules"
         head_count_config = {

@@ -4,7 +4,7 @@ from typing import Dict, NamedTuple, Optional, TypedDict
 
 import torch
 
-from ..config import BaseConfig
+from scaling.core.config import BaseConfig
 
 
 class OptimizerStepOutput(NamedTuple):

@@ -1,3 +1,4 @@
+from .embedding_dataset import EmbeddingBlendedDataset, EmbeddingDataset
 from .finetuning_chat_dataset import FinetuningChatBlendedDataset, FinetuningChatDataset
 from .finetuning_text_dataset import FinetuningTextBlendedDataset, FinetuningTextDataset
 from .inference_settings import (

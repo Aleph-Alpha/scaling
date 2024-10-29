@@ -3,6 +3,7 @@ import pytest
 from scaling.core import pipe_partition_uniform
 
 
+@pytest.mark.nn_rest
 @pytest.mark.parametrize("pipe_parallel_size", [1, 2, 3, 5, 6, 17, 32])
 @pytest.mark.parametrize("number_of_layers", [1, 2, 3, 5, 6, 17, 32, 64, 73, 128])
 def test_pipe_partition_uniform(pipe_parallel_size: int, number_of_layers: int):

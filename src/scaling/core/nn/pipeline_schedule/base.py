@@ -8,8 +8,8 @@ from typing import Any, Optional
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from ...topology import Topology, TopologyConfig
-from .instructions import InstructionBase
+from scaling.core.nn.pipeline_schedule.instructions import InstructionBase
+from scaling.core.topology import Topology, TopologyConfig
 
 DEPENDENCY_MAP = {
     "InstructionRecvActivation": {

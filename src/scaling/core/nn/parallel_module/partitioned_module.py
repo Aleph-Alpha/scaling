@@ -9,18 +9,27 @@ from typing import (
 import torch
 
 from scaling.core.logging import logger
-
-from ...topology import PipePartitionMethod, Topology
-from ...utils.param_merge import merge_parameter, split_parameter
-from ..parameter_meta import CoreParameterMeta
-from .layer_spec import LayerSpec, TiedLayerSpec
-from .pipeline_partitioning import (
+from scaling.core.nn.parallel_module.pipeline_partitioning import (
     PipePartitionCoordinates,
     pipe_partition_balanced,
     pipe_partition_from_indices,
     pipe_partition_uniform,
 )
-from .tied_layer_index import TiedLayerIndex
+from scaling.core.nn.parallel_module.tied_layer_index import TiedLayerIndex
+from scaling.core.nn.parameter_meta import CoreParameterMeta, UMuPParameterMeta
+from scaling.core.topology import PipePartitionMethod, Topology
+from scaling.core.utils.param_merge import merge_parameter, split_parameter
+
+from .layer_spec import LayerSpec, TiedLayerSpec
+
+legacy_checkpoint_mapping = {
+    "TransformerEmbeddingHead": "LuminousEmbeddingHead",
+    "EmbeddingInput": "LuminousEmbeddingInput",
+    "TransformerLayer": "LuminousLayer",
+    "TransformerLayerIO": "LuminousLayerIO",
+    "TransformerLMHead": "LuminousLMHead",
+    "TransformerLMHeadTied": "LuminousLMHeadTied",
+}
 
 
 def key_match(key: str, list_of_patterns: list[str]) -> bool:
@@ -194,6 +203,46 @@ class PipePartitionedModule(
 
                 self._layers.append(_layer)
 
+    def umup_setup(
+        self,
+        effective_batch_size: int,
+        depth: int,
+        avg_sequence_length: int,
+        allow_non_umup_params: bool = False,
+    ) -> None:
+        for module in self.modules():
+            if module is self:
+                continue
+            if hasattr(module, "umup_setup"):
+                module.umup_setup(
+                    effective_batch_size=effective_batch_size,
+                    depth=depth,
+                    avg_sequence_length=avg_sequence_length,
+                )
+                # We typically use the paradigm to switch to a different forward pass
+                # via the _use_umup flag that gets modified by umup_setup.
+                # The assert is to ensure we do not forget to switch the flag
+                assert hasattr(module, "_use_umup") and module._use_umup, module.__class__
+        if not allow_non_umup_params:
+            for n, p in self.named_parameters():
+                assert hasattr(p, "core_parameter_meta")
+                assert isinstance(p.core_parameter_meta, CoreParameterMeta)
+                assert isinstance(
+                    p.core_parameter_meta.umup_meta, UMuPParameterMeta
+                ), f"mup parameter meta not set for {n}"
+                assert hasattr(
+                    p.core_parameter_meta.umup_meta, "forward_multiplier"
+                ), f"forward multiplier is not set for parameter {n}"
+                assert hasattr(
+                    p.core_parameter_meta.umup_meta, "backward_multiplier"
+                ), f"backward multiplier is not set for parameter {n}"
+                assert hasattr(
+                    p.core_parameter_meta.umup_meta, "grad_multiplier"
+                ), f"grad multiplier is not set for parameter {n}"
+                assert hasattr(
+                    p.core_parameter_meta.umup_meta, "lr_multiplier"
+                ), f"lr multiplier is not set for parameter {n}"
+
     def save_checkpoint(self, dir_: Union[Path, str], separate_file_for_parameters: Optional[list[str]]) -> None:
         """Saves the model state to a directory.
 
@@ -215,16 +264,10 @@ class PipePartitionedModule(
                         state_dicts[state_dict_parameter_name] = dict()
 
                 names_in_state_dict = list(layer.state_dict().keys())
-
-                for (
-                    parameter_name,
-                    parameter,
-                ) in list(layer.named_parameters()) + list(
-                    layer.named_buffers()
-                ):  # named_parameters() gives the same names that would otherwise be present when calling .state_dict()
-                    if (
-                        parameter_name not in names_in_state_dict
-                    ):  # we make sure that non-persistent buffers are excluded
+                # named_parameters() gives the same names that would otherwise be present when calling .state_dict()
+                for parameter_name, parameter in list(layer.named_parameters()) + list(layer.named_buffers()):
+                    if parameter_name not in names_in_state_dict:
+                        # we make sure that non-persistent buffers are excluded
                         continue
                     core_parameter_meta: CoreParameterMeta = parameter.core_parameter_meta
                     if self.topology is not None:
@@ -258,7 +301,7 @@ class PipePartitionedModule(
 
     def load_checkpoint(
         self,
-        dir_: Union[Path, str, Sequence[Union[Path, str]]],
+        dir_: Path | str | list[Path | str],
         add_bias_names_if_not_exist: Optional[list[str]] = None,
         add_bias_names_if_not_exist_exceptions: Optional[list[str]] = None,
         allowed_missing_keys_in_checkpoint: Optional[list[str]] = None,
@@ -272,6 +315,7 @@ class PipePartitionedModule(
         input_list = [dir_] if not isinstance(dir_, list) else dir_
         input_paths = [Path(path) for path in input_list]
         missing_dirs = list(filter(lambda p: not p.is_dir(), input_paths))
+        legacy_checkpoint = _is_legacy_checkpoint(input_paths)
         if missing_dirs:
             raise RuntimeError(f"Weight set directories missing 📢🚨❗: {missing_dirs}")
 
@@ -289,9 +333,12 @@ class PipePartitionedModule(
         for local_layer_index, layer in enumerate(self._layers):
             layer_index = layer_index_offset + local_layer_index
             logger.debug(f"Loading model state for layer {layer_index}.")
-            state_dict = dict()
+            state_dict = {}
+            layer_class_name = layer.__class__.__name__
+            if legacy_checkpoint:
+                layer_class_name = legacy_checkpoint_mapping.get(layer_class_name, layer_class_name)
             for path in input_paths:
-                for state_dict_file in path.glob(f"model_state_layer_{layer_index}_{layer.__class__.__name__}*.pt"):
+                for state_dict_file in path.glob(f"model_state_layer_{layer_index}_{layer_class_name}*.pt"):
                     state_dict.update(torch.load(state_dict_file))
             logger.debug(f"Done loading model state for layer {layer_index}.")
 
@@ -318,7 +365,7 @@ class PipePartitionedModule(
             # overwrite state_dict with parallel split parameters for the current model parallel rank
             if self.topology is not None and self.topology.config.model_parallel_size > 1:
                 for parameter_name, parameter in list(layer.named_parameters()) + list(layer.named_buffers()):
-                    if parameter_name in state_dict and (parameter.core_parameter_meta.is_model_parallel):
+                    if parameter_name in state_dict and parameter.core_parameter_meta.is_model_parallel:
                         parameters_for_all_mp = state_dict[parameter_name].data
                         split_parameter_for_mp_rank = split_parameter(
                             parameter=parameters_for_all_mp,
@@ -329,9 +376,7 @@ class PipePartitionedModule(
 
             # Remove unwanted keys.
             if ignore_keys_in_checkpoint is not None:
-                for key in state_dict:
-                    if key_match(key, ignore_keys_in_checkpoint):
-                        del state_dict[key]
+                state_dict = {k: v for k, v in state_dict.items() if not key_match(k, ignore_keys_in_checkpoint)}
 
             # Load state_dict and track missing and unexpected keys.
             incompatible_keys = layer.load_state_dict(state_dict, strict=False)
@@ -339,13 +384,9 @@ class PipePartitionedModule(
             unexpected_keys.update(incompatible_keys.unexpected_keys)
 
         # Check whether unexpected keys were allowed.
-        unexpected_keys_ignored = set()
-        unexpected_keys_error = set()
-        for key in unexpected_keys:
-            if key_match(key, allowed_unexpected_keys_in_checkpoint):
-                unexpected_keys_ignored.add(key)
-            else:
-                unexpected_keys_error.add(key)
+        unexpected_keys_error, unexpected_keys_ignored = _extract_matching_keys(
+            unexpected_keys, allowed_unexpected_keys_in_checkpoint
+        )
         if unexpected_keys_ignored:
             logger.warning(f"Ignoring unexpected keys in checkpoint: {unexpected_keys_ignored}")
         if unexpected_keys_error:
@@ -355,13 +396,9 @@ class PipePartitionedModule(
             )
 
         # Check whether missing keys are allowed.
-        missing_keys_ignored = set()
-        missing_keys_error = set()
-        for key in missing_keys:
-            if key_match(key, allowed_missing_keys_in_checkpoint):
-                missing_keys_ignored.add(key)
-            else:
-                missing_keys_error.add(key)
+        missing_keys_error, missing_keys_ignored = _extract_matching_keys(
+            missing_keys, allowed_missing_keys_in_checkpoint
+        )
         if missing_keys_ignored:
             logger.warning(f"Ignoring missing keys in checkpoint: {missing_keys_ignored}")
         if missing_keys_error:
@@ -369,3 +406,22 @@ class PipePartitionedModule(
                 f"Missing keys in checkpoint: {missing_keys_error}. You may add "
                 f"keys to 'allowed_missing_keys_in_checkpoint'."
             )
+
+
+def _extract_matching_keys(keys: set[str], keys_to_match: list[str]) -> tuple[set[str], set[str]]:
+    keys_matching = set()
+    keys_not_matching = set()
+    for key in keys:
+        if key_match(key, keys_to_match):
+            keys_matching.add(key)
+        else:
+            keys_not_matching.add(key)
+    return keys_not_matching, keys_matching
+
+
+def _is_legacy_checkpoint(paths: Sequence[Path]) -> bool:
+    for path in paths:
+        for legacy_name in legacy_checkpoint_mapping.values():
+            if any(path.glob(f"*{legacy_name}.pt")):
+                return True
+    return False

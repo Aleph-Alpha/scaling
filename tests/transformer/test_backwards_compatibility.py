@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import torch
 
 from scaling.core import Topology
@@ -129,6 +130,7 @@ def run_forward_pass(
     return_dict["output_logits"] = output_logits.activations.clone().detach().cpu()
 
 
+@pytest.mark.transformer
 def test_backward_compatibility():
     backward_checkpoint_dir = Path(__file__).parents[0] / "files" / "backward_compatibility_checkpoint"
     world_size = 1

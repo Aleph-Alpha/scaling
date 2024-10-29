@@ -15,12 +15,12 @@ from scaling.core import (
     Topology,
     VocabParallelEmbedding,
 )
-from scaling.transformer.data.text_dataset_batch import TextDatasetBatch
-
-from ...context.config import (
+from scaling.transformer.context.config import (
     TransformerArchitectureConfig,
 )
-from ..image_encoder import ImageEncoder
+from scaling.transformer.data.text_dataset_batch import TextDatasetBatch
+from scaling.transformer.model.image_encoder import ImageEncoder
+
 from .base import TransformerLayerIO
 
 TextDatasetBatchGeneric = TypeVar("TextDatasetBatchGeneric", bound=TextDatasetBatch)

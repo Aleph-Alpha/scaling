@@ -6,6 +6,7 @@ import pytest
 from scaling.core import RunnerConfig, runner_main
 
 
+@pytest.mark.short
 @pytest.mark.parametrize(
     "hosts,expected_world_size",
     [
@@ -52,6 +53,7 @@ def test_should_run_runner(tmp_path: Path, hosts: List[str], expected_world_size
     assert len(process_outputs) == expected_world_size, "did not write process output"
 
 
+@pytest.mark.short
 def test_create_runner_config_with_legacy_field_names(tmp_path: Path):
     hostsfile = tmp_path / "hostfile"
     with open(hostsfile, "w", encoding="UTF-8") as f:

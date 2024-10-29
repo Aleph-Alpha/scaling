@@ -3,9 +3,10 @@ from typing import Optional
 import pytest
 
 from scaling.core.logging import LoggerConfig, logger
-from scaling.core.logging.logger_config import _check_if_in_rank
+from scaling.core.logging.logger_config import check_if_in_rank
 
 
+@pytest.mark.short
 @pytest.mark.parametrize("ranks", [[], None, [0], [42], [36]])
 @pytest.mark.parametrize("global_rank", [None, 0, 42])
 def test_is_in_rank_like_explicit_condition(ranks: Optional[list[int]], global_rank: Optional[int]) -> None:
@@ -15,9 +16,10 @@ def test_is_in_rank_like_explicit_condition(ranks: Optional[list[int]], global_r
     expected = global_rank is not None and (
         (ranks is None and global_rank == 0) or (ranks is not None and global_rank in ranks)
     )
-    assert expected == _check_if_in_rank(global_rank, ranks)
+    assert expected == check_if_in_rank(global_rank, ranks)
 
 
+@pytest.mark.short
 def test_logger_init() -> None:
     logger.configure(LoggerConfig())
     normal_logger = repr(logger.info)
