@@ -14,7 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - Removed `finetune` from training config. This field is replaced by optimizer groups
 - Removed `finetunable_parameters` from training config. This field is replaced by optimizer groups
-- Removed `parameters_exclude` from training config. Those fields are replaced by optimizer groups
 - Removed `use_separate_lr_on_embeddings` from training config. Those fields are replaced by optimizer groups
 
 ### Added
