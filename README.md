@@ -34,7 +34,7 @@ Among the featured architecture options we support:
 
 ## Installation
 
-The installation requires Linux with Python 3.10 and PyTorch 2.1.1.
+The installation requires Linux with Python 3.10 and PyTorch 2.4.0.
 You will also need the appropriate CUDA dependencies and version installed on your system for GPU support.
 Clone this repository and install via [poetry](https://python-poetry.org/docs/):
 
