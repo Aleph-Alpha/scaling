@@ -1,4 +1,0 @@
-determined==0.26.4
-msrest==0.6.21
-google-api-core==2.8.2
-google-api-python-client==2.61.0
