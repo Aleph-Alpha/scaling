@@ -122,13 +122,6 @@ Please install pre-commit hooks:
 pre-commit install
 ```
 
-Additional dependencies are required if you want to run tests or type checks.
-Install them as follows:
-
-```bash
-pip install -e .[test]
-```
-
 ## Mypy
 
 Run mypy to catch typing mistakes:
